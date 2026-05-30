@@ -1,0 +1,18 @@
+{
+  "name": "@papercusp/plan-parser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure plan-document parser: frontmatter + item/decision algebra + effective-status (blocked-by graph) + canonical content hash. Zero I/O, zero domain coupling.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.4"
+  }
+}
