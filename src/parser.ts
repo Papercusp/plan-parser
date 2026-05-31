@@ -32,6 +32,19 @@ export const ITEM_STATUSES = [
 ] as const;
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
 
+/**
+ * Per-item importance — a 4th axis orthogonal to status. Ordered most →
+ * least important; the array index doubles as the sort rank. For a ToDo
+ * it answers "which to pick up next"; for a needs-human item it answers
+ * "how urgently a human should act." Distinct from the operator's
+ * capability `tier` (risk-of-the-action). See
+ * planning-attention-importance-2026-05-31.
+ */
+export const IMPORTANCE_LEVELS = ['urgent', 'high', 'normal', 'low'] as const;
+export type Importance = (typeof IMPORTANCE_LEVELS)[number];
+/** Default when an item line carries no `importance:` keyword. */
+export const DEFAULT_IMPORTANCE: Importance = 'normal';
+
 export interface PlanFrontmatter {
   title?: string;
   slug?: string;
@@ -55,6 +68,9 @@ export interface PlanItem {
   id: string;
   text: string;
   storedStatus: ItemStatus;
+  /** Per-item importance — defaults to `normal` when the line carries no
+   *  `importance:` keyword. Parsed glyph-agnostically like `blocked-by:`. */
+  importance: Importance;
   blockedBy: string[];
   decisionRefs: string[];
   phase: string | null;
@@ -295,6 +311,22 @@ function parseItemLine(
     text = (text.slice(0, bbMatch.index) + text.slice(bbMatch.index + bbMatch[0].length)).trim();
   }
 
+  // `importance:` keyword — parsed glyph-agnostically like blocked-by,
+  // then stripped from the visible text. An unknown value degrades to
+  // `normal` here WITHOUT a parseWarning (those become lint *errors* —
+  // lint.ts:149); plans:lint instead emits a soft `unknown_importance`
+  // warning by re-scanning the raw line.
+  let importance: Importance = DEFAULT_IMPORTANCE;
+  const importanceRe = /\bimportance\s*:\s*([a-z]+)\b/i;
+  const impMatch = importanceRe.exec(text);
+  if (impMatch) {
+    const tok = (impMatch[1] ?? '').toLowerCase();
+    if ((IMPORTANCE_LEVELS as readonly string[]).includes(tok)) {
+      importance = tok as Importance;
+    }
+    text = (text.slice(0, impMatch.index) + text.slice(impMatch.index + impMatch[0].length)).trim();
+  }
+
   const decisionRefs = Array.from(new Set(text.match(DNN_INLINE) ?? []));
 
   text = text.replace(/[·→—]+\s*$/g, '').trim();
@@ -304,6 +336,7 @@ function parseItemLine(
     id,
     text,
     storedStatus: statusTok as ItemStatus,
+    importance,
     blockedBy,
     decisionRefs,
     phase,
