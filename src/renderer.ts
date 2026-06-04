@@ -99,24 +99,25 @@ export function renderPlanMarkdown(parsed: ParsedPlan): string {
     blocks.push(renderNow(parsed.now));
   }
 
-  // Group items by phase, preserving first-occurrence order. Phase-less items
-  // (phase === null) collect under a synthetic non-"Phase" heading so they
-  // re-parse with phase === null.
-  const PHASELESS = '__phaseless__';
-  const order: string[] = [];
-  const byPhase = new Map<string, PlanItem[]>();
-  for (const item of parsed.items) {
-    const key = item.phase ?? PHASELESS;
-    if (!byPhase.has(key)) {
-      byPhase.set(key, []);
-      order.push(key);
+  // Render items in DOCUMENT ORDER, emitting a heading only when the phase
+  // CHANGES (so a phase that recurs non-contiguously keeps each item's original
+  // order + phase association — grouping by phase would reorder them). A `## Phase…`
+  // heading re-parses to that phase; any other `## ` heading re-parses to phase
+  // === null, so phase-less runs get a synthetic non-"Phase" `## Items` heading.
+  if (parsed.items.length > 0) {
+    const lines: string[] = [];
+    let prevPhase: string | null | undefined = undefined; // undefined = no heading emitted yet
+    for (const item of parsed.items) {
+      const phase = item.phase;
+      if (phase !== prevPhase) {
+        if (lines.length > 0) lines.push('');
+        lines.push(phase ? `## ${phase}` : '## Items');
+        lines.push('');
+        prevPhase = phase;
+      }
+      lines.push(renderItem(item));
     }
-    byPhase.get(key)!.push(item);
-  }
-  for (const key of order) {
-    const heading = key === PHASELESS ? '## Items' : `## ${key}`;
-    const items = byPhase.get(key)!;
-    blocks.push(`${heading}\n\n${items.map(renderItem).join('\n')}`);
+    blocks.push(lines.join('\n'));
   }
 
   if (parsed.decisions.length > 0) {
