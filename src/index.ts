@@ -11,3 +11,4 @@
 export * from './parser';
 export * from './effective-status';
 export * from './content-hash';
+export * from './renderer';

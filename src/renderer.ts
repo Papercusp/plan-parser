@@ -1,0 +1,128 @@
+/**
+ * renderPlanMarkdown — render the QUERYABLE structure of a plan back to markdown.
+ *
+ * Plan: plans-pg-canonical-migration-2026-06-03 (Stage 3 — normalize, D-006).
+ *
+ * The structured sections (frontmatter + `## Now` + items + decisions) become a
+ * derived index in PG columns; this renderer turns that structure back into
+ * markdown. It is the INVERSE of `parsePlan` over the queryable sections — NOT a
+ * byte-for-byte reproduction of free prose (the prose body stays canonical in
+ * `content`; this renderer never reproduces it).
+ *
+ * The correctness gate is the round-trip property
+ *   parse(render(parse(x))) ≡ parse(x)   (structurally — frontmatter / now /
+ *   items / decisions; NOT prose, NOT byte fidelity)
+ * proved by renderer.test.ts over every real plan + fast-check generators.
+ *
+ * Pure, zero I/O — same tier as the parser.
+ */
+
+import {
+  type ParsedPlan,
+  type PlanItem,
+  type PlanDecision,
+  type PlanNowBlock,
+  type PlanFrontmatter,
+  DEFAULT_IMPORTANCE,
+} from './parser';
+
+/** Render the frontmatter block from its parsed raw key/values. Arrays emit as
+ *  flow-style `[a, b, c]`; scalars as `key: value`. Order follows `raw`'s keys
+ *  (insertion order) — the parser is order-insensitive, so any order round-trips. */
+function renderFrontmatter(fm: PlanFrontmatter): string {
+  const lines: string[] = ['---'];
+  for (const [key, value] of Object.entries(fm.raw)) {
+    if (Array.isArray(value)) {
+      lines.push(`${key}: [${value.join(', ')}]`);
+    } else {
+      lines.push(`${key}: ${value}`);
+    }
+  }
+  lines.push('---');
+  return lines.join('\n');
+}
+
+/**
+ * Render the `## Now` block. `now.raw` is the verbatim section body — emitting it
+ * directly is the faithful round-trip (the Now block is a structured section, not
+ * free prose), and it preserves non-standard layouts (e.g. `**Status:**` /
+ * `**Shipped:**`) that the `**State:**`/`**Next:**` split alone would lose. The
+ * derived `now_state` / `now_next` columns capture the queryable views.
+ */
+function renderNow(now: PlanNowBlock): string {
+  return `## Now\n\n${now.raw}`;
+}
+
+/**
+ * Render one item line in the exact shape `parseItemLine` consumes:
+ *   `- **P-NNN** \`status\` text [blocked-by: …] [importance: …]`
+ * The parser strips `blocked-by:` + `importance:` from the text but KEEPS
+ * inline `D-NNN` decision refs, so `item.text` already carries the refs and we
+ * re-append only the stripped keywords (importance only when non-default).
+ */
+function renderItem(item: PlanItem): string {
+  let line = `- **${item.id}** \`${item.storedStatus}\` ${item.text}`;
+  if (item.blockedBy.length > 0) {
+    line += ` blocked-by: ${item.blockedBy.join(', ')}`;
+  }
+  if (item.importance !== DEFAULT_IMPORTANCE) {
+    line += ` importance: ${item.importance}`;
+  }
+  return line;
+}
+
+/** Render one decision: `### D-NNN — title` then its body verbatim (the body
+ *  already contains any `Date:` / `P-NNN` ref lines the parser reads back). */
+function renderDecision(d: PlanDecision): string {
+  const head = d.title ? `### ${d.id} — ${d.title}` : `### ${d.id}`;
+  return d.body ? `${head}\n\n${d.body}` : head;
+}
+
+/**
+ * Render a plan's queryable structure to a parseable markdown document.
+ *
+ * Items are grouped under their `phase` heading (a `## <phase>` for items whose
+ * phase matched `^Phase…`, or a single non-`Phase` `## Items` heading for the
+ * phase-less ones — both re-parse to the same `item.phase`). Decisions go under
+ * `## Decisions`. The free prose body is intentionally NOT reproduced.
+ */
+export function renderPlanMarkdown(parsed: ParsedPlan): string {
+  const blocks: string[] = [];
+
+  blocks.push(renderFrontmatter(parsed.frontmatter));
+
+  if (parsed.frontmatter.title) {
+    blocks.push(`# ${parsed.frontmatter.title}`);
+  }
+
+  if (parsed.now) {
+    blocks.push(renderNow(parsed.now));
+  }
+
+  // Group items by phase, preserving first-occurrence order. Phase-less items
+  // (phase === null) collect under a synthetic non-"Phase" heading so they
+  // re-parse with phase === null.
+  const PHASELESS = '__phaseless__';
+  const order: string[] = [];
+  const byPhase = new Map<string, PlanItem[]>();
+  for (const item of parsed.items) {
+    const key = item.phase ?? PHASELESS;
+    if (!byPhase.has(key)) {
+      byPhase.set(key, []);
+      order.push(key);
+    }
+    byPhase.get(key)!.push(item);
+  }
+  for (const key of order) {
+    const heading = key === PHASELESS ? '## Items' : `## ${key}`;
+    const items = byPhase.get(key)!;
+    blocks.push(`${heading}\n\n${items.map(renderItem).join('\n')}`);
+  }
+
+  if (parsed.decisions.length > 0) {
+    const decisions = parsed.decisions.map(renderDecision).join('\n\n');
+    blocks.push(`## Decisions\n\n${decisions}`);
+  }
+
+  return blocks.join('\n\n') + '\n';
+}
