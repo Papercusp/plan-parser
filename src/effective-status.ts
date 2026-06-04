@@ -40,7 +40,19 @@ export interface ResolveResult {
 }
 
 export function resolveEffectiveStatus(plan: ParsedPlan): ResolveResult {
-  const byId = new Map(plan.items.map((it) => [it.id, it]));
+  return resolveEffectiveStatusForItems(plan.items);
+}
+
+/**
+ * Effective-status resolution over a bare item array — the core algorithm
+ * (`resolveEffectiveStatus` is the ParsedPlan-shaped wrapper). Lets a caller
+ * resolve from the PG-canonical structured `items` index (plans-pg-canonical-
+ * migration Stage 3) without re-parsing the content blob. Only `id`,
+ * `storedStatus`, and `blockedBy` drive the result; the rest of each PlanItem is
+ * carried through to the ResolvedItem unchanged.
+ */
+export function resolveEffectiveStatusForItems(planItems: PlanItem[]): ResolveResult {
+  const byId = new Map(planItems.map((it) => [it.id, it]));
   const missingRefs: Array<{ itemId: string; ref: string }> = [];
   const cycleMembers: string[] = [];
 
@@ -71,10 +83,10 @@ export function resolveEffectiveStatus(plan: ParsedPlan): ResolveResult {
     colors.set(id, 2);
   };
 
-  for (const it of plan.items) visit(it.id, new Set());
+  for (const it of planItems) visit(it.id, new Set());
   cycleMembers.push(...inCycle);
 
-  const items: ResolvedItem[] = plan.items.map((it) => {
+  const items: ResolvedItem[] = planItems.map((it) => {
     if (inCycle.has(it.id)) {
       return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: it.blockedBy };
     }
