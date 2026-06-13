@@ -27,10 +27,44 @@
  */
 
 import type { ItemStatus, PlanItem, ParsedPlan } from './parser';
+import { deriveNeedsHuman } from './risk-model';
 
 export interface ResolvedItem extends PlanItem {
   effectiveStatus: ItemStatus;
   unresolvedBlockers: string[];
+  /**
+   * The DERIVED needs-human verdict (queen-autonomy-policy-2026-06-13 B-12 /
+   * P-072): `needs-human` is no longer a stored token but the top band of the
+   * risk model (D-001). The orchestrator DONE-gate + `plans:items needsHuman`
+   * key on THIS, not on `storedStatus === 'needs-human'`, so the gate stays
+   * correct under the new model. BEHAVIOR-NEUTRAL today (D-007): with the policy
+   * unarmed `deriveNeedsHuman` returns exactly the stored token (plus the
+   * authority=owner override, which no legacy item sets), so the value equals
+   * `storedStatus === 'needs-human'` until the owner arms autonomy (P-092).
+   */
+  needsHuman: boolean;
+}
+
+/**
+ * The derived needs-human verdict for one plan item (B-12 / P-072) — the pure
+ * top-band derivation the DONE-gate keys on. Behavior-neutral by default
+ * (`armed` defaults false ⇒ exactly the stored `needs-human` token, plus the
+ * authority=owner override). The ARMED, ceiling-aware path (a high-risk item
+ * above its category ceiling) flows once a caller supplies `ceiling` + `armed`;
+ * plan items carry no tool/category today (work_items.risk_tier deferred, D-015),
+ * so the live gate stays on the behavior-neutral path.
+ */
+export function deriveItemNeedsHuman(
+  item: Pick<PlanItem, 'storedStatus' | 'riskTier' | 'authority'>,
+  opts: { armed?: boolean; ceiling?: import('./risk-model').AutonomyCeiling | null } = {},
+): boolean {
+  return deriveNeedsHuman({
+    storedNeedsHuman: item.storedStatus === 'needs-human',
+    riskTier: item.riskTier ?? null,
+    authority: item.authority ?? null,
+    ceiling: opts.ceiling ?? null,
+    armed: opts.armed ?? false,
+  });
 }
 
 export interface ResolveResult {
@@ -87,8 +121,14 @@ export function resolveEffectiveStatusForItems(planItems: PlanItem[]): ResolveRe
   cycleMembers.push(...inCycle);
 
   const items: ResolvedItem[] = planItems.map((it) => {
+    // The derived needs-human top band (B-12 / P-072) is computed from the item's
+    // own risk axes, INDEPENDENT of the blocked-by graph (an item awaiting a human
+    // decision still needs that human whether or not it is currently blocked) — so
+    // it is the same on every effectiveStatus branch below.
+    const needsHuman = deriveItemNeedsHuman(it);
+
     if (inCycle.has(it.id)) {
-      return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: it.blockedBy };
+      return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: it.blockedBy, needsHuman };
     }
 
     const unresolved: string[] = [];
@@ -104,14 +144,14 @@ export function resolveEffectiveStatusForItems(planItems: PlanItem[]): ResolveRe
     }
 
     if (it.storedStatus === 'blocked') {
-      return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: unresolved };
+      return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: unresolved, needsHuman };
     }
 
     if (unresolved.length > 0) {
-      return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: unresolved };
+      return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: unresolved, needsHuman };
     }
 
-    return { ...it, effectiveStatus: it.storedStatus, unresolvedBlockers: [] };
+    return { ...it, effectiveStatus: it.storedStatus, unresolvedBlockers: [], needsHuman };
   });
 
   return { items, missingRefs, cycleMembers };

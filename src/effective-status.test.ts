@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { resolveEffectiveStatus } from './effective-status';
-import type { ItemStatus, ParsedPlan } from './parser';
+import { resolveEffectiveStatus, deriveItemNeedsHuman } from './effective-status';
+import type { ItemStatus, ParsedPlan, PlanItem } from './parser';
 
 /**
  * effective-status.test.ts — P-020 of test-coverage-rest-non-critical. The
@@ -64,5 +64,53 @@ describe('resolveEffectiveStatus', () => {
     expect(eff(r, 'A').effectiveStatus).toBe('blocked');
     expect(eff(r, 'B').effectiveStatus).toBe('blocked');
     expect([...r.cycleMembers].sort()).toEqual(['A', 'B']);
+  });
+});
+
+// ── B-12 / P-072: the DERIVED needs-human top band the DONE-gate keys on ──────
+describe('resolveEffectiveStatus — derived needsHuman (B-12 / P-072)', () => {
+  const pi = (p: Partial<PlanItem> & { id: string; storedStatus: ItemStatus }): PlanItem =>
+    ({ text: 'x', importance: 'normal', blockedBy: [], ...p }) as PlanItem;
+  const resolvePI = (...items: PlanItem[]) =>
+    resolveEffectiveStatus({ items } as unknown as ParsedPlan);
+  const got = (r: ReturnType<typeof resolvePI>, id: string) => r.items.find((i) => i.id === id)!;
+
+  it('BEHAVIOR-NEUTRAL: needsHuman equals storedStatus === "needs-human" (unarmed default)', () => {
+    const r = resolvePI(
+      pi({ id: 'A', storedStatus: 'todo' }),
+      pi({ id: 'B', storedStatus: 'needs-human' }),
+      pi({ id: 'C', storedStatus: 'done' }),
+    );
+    expect(got(r, 'A').needsHuman).toBe(false);
+    expect(got(r, 'B').needsHuman).toBe(true);
+    expect(got(r, 'C').needsHuman).toBe(false);
+  });
+
+  it('authority=owner derives needsHuman even from a non-needs-human stored token (P-011)', () => {
+    const r = resolvePI(pi({ id: 'A', storedStatus: 'todo', authority: 'owner' }));
+    expect(got(r, 'A').needsHuman).toBe(true);
+  });
+
+  it('a high riskTier alone does NOT gate while unarmed (behavior-neutral; armed path is P-092)', () => {
+    const r = resolvePI(pi({ id: 'A', storedStatus: 'todo', riskTier: 'critical' }));
+    expect(got(r, 'A').needsHuman).toBe(false);
+  });
+
+  it('needsHuman is independent of the blocked-by graph (a blocked needs-human item still needs the human)', () => {
+    const r = resolvePI(
+      pi({ id: 'A', storedStatus: 'needs-human', blockedBy: ['B'] }),
+      pi({ id: 'B', storedStatus: 'todo' }),
+    );
+    expect(got(r, 'A').effectiveStatus).toBe('blocked'); // its blocker isn't done…
+    expect(got(r, 'A').needsHuman).toBe(true); // …but it still needs a human decision
+  });
+
+  it('deriveItemNeedsHuman: armed + ceiling-aware path gates a risk above the effective ceiling', () => {
+    // The wired-but-inert armed path (P-092). Unarmed (default) ⇒ stored token.
+    const item = { storedStatus: 'todo' as const, riskTier: 'high' as const, authority: 'system' as const };
+    expect(deriveItemNeedsHuman(item)).toBe(false); // unarmed
+    expect(deriveItemNeedsHuman(item, { armed: true, ceiling: 'low' })).toBe(true); // high > low
+    expect(deriveItemNeedsHuman(item, { armed: true, ceiling: 'critical' })).toBe(false); // high ≤ critical
+    expect(deriveItemNeedsHuman(item, { armed: true, ceiling: 'never-auto' })).toBe(true); // never-auto
   });
 });
