@@ -13,3 +13,4 @@ export * from './risk-model';
 export * from './effective-status';
 export * from './content-hash';
 export * from './renderer';
+export * from './parts';
