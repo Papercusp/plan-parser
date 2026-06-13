@@ -9,6 +9,7 @@
  * Extracted per papercusp-systems-abstraction-2026-05-29 (P-022 / D-005).
  */
 export * from './parser';
+export * from './risk-model';
 export * from './effective-status';
 export * from './content-hash';
 export * from './renderer';

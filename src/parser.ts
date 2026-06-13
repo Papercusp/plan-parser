@@ -19,6 +19,14 @@
  *     = true; callers (list/get) decide whether to surface them.
  */
 
+import {
+  type RiskTier,
+  RISK_TIERS,
+  type Authority,
+  AUTHORITY_LEVELS,
+  DEFAULT_AUTHORITY,
+} from './risk-model';
+
 export const PLAN_STATUSES = ['draft', 'ready', 'active', 'shipped', 'superseded'] as const;
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
 
@@ -71,6 +79,16 @@ export interface PlanItem {
   /** Per-item importance — defaults to `normal` when the line carries no
    *  `importance:` keyword. Parsed glyph-agnostically like `blocked-by:`. */
   importance: Importance;
+  /** Per-item autonomy risk tier (queen-autonomy-policy B-01 / P-010) — the
+   *  graded scale the autonomy gate consumes, kept DISTINCT from `importance`
+   *  (the ranker's axis, P-014). `null` when the line carries no `risk:` keyword.
+   *  Optional on the type so external item literals stay valid; the parser always
+   *  populates it (null when absent). See `./risk-model`. */
+  riskTier?: RiskTier | null;
+  /** Per-item decision authority (P-011) — `owner` always gates regardless of the
+   *  computed risk. Defaults to `system` when the line carries no `authority:`
+   *  keyword. Optional on the type (parser always populates). See `./risk-model`. */
+  authority?: Authority;
   blockedBy: string[];
   decisionRefs: string[];
   phase: string | null;
@@ -327,6 +345,34 @@ function parseItemLine(
     text = (text.slice(0, impMatch.index) + text.slice(impMatch.index + impMatch[0].length)).trim();
   }
 
+  // `risk:` keyword — the autonomy risk tier (queen-autonomy-policy B-01), parsed
+  // glyph-agnostically like `importance:` and stripped from the visible text. An
+  // unknown value degrades to `null` (no tier) WITHOUT a parseWarning, mirroring
+  // the importance handling.
+  let riskTier: RiskTier | null = null;
+  const riskRe = /\brisk\s*:\s*([a-z]+)\b/i;
+  const riskMatch = riskRe.exec(text);
+  if (riskMatch) {
+    const tok = (riskMatch[1] ?? '').toLowerCase();
+    if ((RISK_TIERS as readonly string[]).includes(tok)) {
+      riskTier = tok as RiskTier;
+    }
+    text = (text.slice(0, riskMatch.index) + text.slice(riskMatch.index + riskMatch[0].length)).trim();
+  }
+
+  // `authority:` keyword — decision authority (P-011), defaults to `system`. An
+  // unknown value degrades to the default WITHOUT a parseWarning.
+  let authority: Authority = DEFAULT_AUTHORITY;
+  const authorityRe = /\bauthority\s*:\s*([a-z]+)\b/i;
+  const authMatch = authorityRe.exec(text);
+  if (authMatch) {
+    const tok = (authMatch[1] ?? '').toLowerCase();
+    if ((AUTHORITY_LEVELS as readonly string[]).includes(tok)) {
+      authority = tok as Authority;
+    }
+    text = (text.slice(0, authMatch.index) + text.slice(authMatch.index + authMatch[0].length)).trim();
+  }
+
   const decisionRefs = Array.from(new Set(text.match(DNN_INLINE) ?? []));
 
   text = text.replace(/[·→—]+\s*$/g, '').trim();
@@ -337,6 +383,8 @@ function parseItemLine(
     text,
     storedStatus: statusTok as ItemStatus,
     importance,
+    riskTier,
+    authority,
     blockedBy,
     decisionRefs,
     phase,

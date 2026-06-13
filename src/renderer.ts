@@ -25,6 +25,7 @@ import {
   type PlanFrontmatter,
   DEFAULT_IMPORTANCE,
 } from './parser';
+import { DEFAULT_AUTHORITY } from './risk-model';
 
 /** Render the frontmatter block from its parsed raw key/values. Arrays emit as
  *  flow-style `[a, b, c]`; scalars as `key: value`. Order follows `raw`'s keys
@@ -67,6 +68,15 @@ function renderItem(item: PlanItem): string {
   }
   if (item.importance !== DEFAULT_IMPORTANCE) {
     line += ` importance: ${item.importance}`;
+  }
+  // Autonomy axes (queen-autonomy-policy B-01) — emit only when non-default so the
+  // round-trip stays lean: a tier-less item and a `system`-authority item render
+  // exactly as before. The parser strips `risk:`/`authority:` back out on re-parse.
+  if (item.riskTier != null) {
+    line += ` risk: ${item.riskTier}`;
+  }
+  if ((item.authority ?? DEFAULT_AUTHORITY) !== DEFAULT_AUTHORITY) {
+    line += ` authority: ${item.authority}`;
   }
   return line;
 }
