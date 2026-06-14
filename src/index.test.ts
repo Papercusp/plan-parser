@@ -44,6 +44,13 @@ describe('@papercusp/plan-parser', () => {
     expect(p.decisions.map((d) => d.id)).toEqual(['D-001']);
   });
 
+  it('parses the optional `initiative` frontmatter grouping label (P-015)', () => {
+    const withInit = parsePlan(PLAN.replace('status: active', 'status: active\ninitiative: shared-hive'));
+    expect(withInit.frontmatter.initiative).toBe('shared-hive');
+    // Absent ⇒ undefined (a plan with no initiative groups into nothing).
+    expect(parsePlan(PLAN).frontmatter.initiative).toBeUndefined();
+  });
+
   it('resolveEffectiveStatus blocks an item whose blocker is not done', () => {
     const p = parsePlan(PLAN.replace('**P-001** `done`', '**P-001** `wip`'));
     const { items } = resolveEffectiveStatus(p);
