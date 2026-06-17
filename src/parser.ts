@@ -297,8 +297,12 @@ function splitSections(body: string): RawSection[] {
 function parseNow(section: RawSection): PlanNowBlock | null {
   const raw = section.body.join('\n').trim();
   if (!raw) return null;
+  // Both captures stop at the *other* marker (or EOF) so the State / Next
+  // blocks are anchored independently of their order — an author who writes
+  // `**Next:**` before `**State:**` still gets each block parsed cleanly
+  // instead of Next greedily swallowing the trailing State line.
   const stateMatch = /\*\*State:\*\*\s*([\s\S]*?)(?=\n\s*\*\*Next:\*\*|$)/i.exec(raw);
-  const nextMatch = /\*\*Next:\*\*\s*([\s\S]*?)$/i.exec(raw);
+  const nextMatch = /\*\*Next:\*\*\s*([\s\S]*?)(?=\n\s*\*\*State:\*\*|$)/i.exec(raw);
   return {
     state: stateMatch ? (stateMatch[1] ?? '').trim() : '',
     next: nextMatch ? (nextMatch[1] ?? '').trim() : '',
