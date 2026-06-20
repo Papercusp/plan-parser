@@ -64,6 +64,11 @@ export interface PlanFrontmatter {
    *  (shared-hive-collaboration P-015). One metadata field — explicitly NOT a
    *  branch/worktree/PR hierarchy (D-002). Surfaced as a plans-list filter facet. */
   initiative?: string;
+  /** Template TYPE this plan conforms to (plan-templates-and-rubric-v2 P-004/P-005) —
+   *  names a code-registry zod schema (e.g. `rubric`). Derived into the `template`
+   *  column (mirrors `initiative`); the per-plan structured instance data lives in
+   *  the `template_data` jsonb (plans:set-template-data), never in frontmatter. */
+  template?: string;
   supersedes?: string[];
   supersededBy?: string;
   raw: Record<string, string | string[]>;
@@ -225,6 +230,7 @@ function parseFrontmatter(fm: string | null): {
   if (typeof raw.updated === 'string') out.updated = raw.updated;
   if (typeof raw.owner === 'string') out.owner = raw.owner;
   if (typeof raw.initiative === 'string') out.initiative = raw.initiative;
+  if (typeof raw.template === 'string') out.template = raw.template;
   if (Array.isArray(raw.supersedes)) out.supersedes = raw.supersedes;
   if (typeof raw['superseded-by'] === 'string') out.supersededBy = raw['superseded-by'];
   if (typeof raw.supersededBy === 'string' && !out.supersededBy) {
