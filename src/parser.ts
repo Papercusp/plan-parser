@@ -136,6 +136,21 @@ const DNN = /^D-\d{3,}$/;
 const PNN_INLINE = /\bP-\d{3,}\b/g;
 const DNN_INLINE = /\bD-\d{3,}\b/g;
 
+/**
+ * The marker the operator's `plans:set-status` injects for a caller-supplied
+ * `note` (EI-384) — ` — note: <free text>` appended to an item line, replacing
+ * any note it previously injected rather than stacking. Exported so a note's
+ * free PROSE can be excluded from structured-reference extraction below
+ * (EI-522): a note that happens to mention another plan's `D-NNN` decision id
+ * in prose (e.g. "back-refs added to other-plan D-025") must not be parsed as
+ * a LOCAL decision reference — that produced spurious `unknown_decision_ref`
+ * lint warnings, or silently-wrong resolution when the token collided with a
+ * real local decision id. The operator's own note-injection code
+ * (plans/set-status.ts) matches this exact pattern; kept here as the single
+ * source of truth so parser and injector can never drift apart.
+ */
+export const NOTE_SUFFIX_RE = /\s*—\s*note:.*$/;
+
 const HEADING_NUM_PREFIX = /^\d+(?:\.\d+)?\.\s+/;
 
 function normalizeHeading(text: string): string {
@@ -388,7 +403,11 @@ function parseItemLine(
     text = (text.slice(0, authMatch.index) + text.slice(authMatch.index + authMatch[0].length)).trim();
   }
 
-  const decisionRefs = Array.from(new Set(text.match(DNN_INLINE) ?? []));
+  // EI-522: strip a set-status-injected note's free prose before scanning for
+  // structured D-NNN refs — only `text` (returned to callers/display)
+  // includes the note; the ref set must not.
+  const textForDecisionRefs = text.replace(NOTE_SUFFIX_RE, '');
+  const decisionRefs = Array.from(new Set(textForDecisionRefs.match(DNN_INLINE) ?? []));
 
   text = text.replace(/[·→—]+\s*$/g, '').trim();
   text = text.replace(/\s+→\s+(?=D-\d)/g, ' ').replace(/\s+·\s+/g, ' ').trim();
