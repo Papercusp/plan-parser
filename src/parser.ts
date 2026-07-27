@@ -129,6 +129,17 @@ export interface ParsedPlan {
   raw: string;
   isLegacy: boolean;
   parseWarnings: string[];
+  /**
+   * Non-blocking parse observations (EI-18804290731494084).
+   *
+   * ⚠ Deliberately SEPARATE from `parseWarnings`, and the distinction is
+   * load-bearing: the operator's lint maps every `parseWarnings` entry to a
+   * level:'error' finding (`parse_warning`), and `plans:edit` /
+   * `plans:set-content` reject on any error — so anything pushed to
+   * `parseWarnings` makes the plan UNWRITABLE. A notice is for something a
+   * reader should know but that must never wedge a write.
+   */
+  parseNotices: string[];
 }
 
 const PNN = /^P-\d{3,}$/;
@@ -427,10 +438,31 @@ function parseItemLine(
   };
 }
 
-const DECISION_HEAD_RE = /^###\s+(D-\d{3,})\b\s*(?:[-–—]\s*)?(.*)$/;
+/**
+ * A decision DECLARATION head inside `## Decisions`.
+ *
+ * The id must be followed by whitespace, a separator, or end-of-line
+ * (EI-18804290731494084). The previous `\b` boundary also matched an id
+ * GLUED to prose — `### D-045's framing was incomplete` parsed as a second
+ * declaration of D-045, producing a phantom decision, a duplicate-id lint
+ * ERROR, and (because lint errors reject every write) a permanently
+ * un-editable plan.
+ *
+ * ⚠ This match deliberately does NOT require the canonical `— ` separator.
+ * Measured across the whole plan corpus (528 plans / 3,921 decision heads):
+ * 3,767 use a separator but **148 are real decisions written `### D-NNN
+ * Title`**, in consistent D-001…D-013 runs across entire plans. Requiring a
+ * separator would silently reclassify all 148 as body and destroy them.
+ * There is no lexical difference between a real `### D-004 P-011 and P-012
+ * remain owned by …` and a prose `### D-053 held, and is now pinned …`, so
+ * the second half of the fix is sequence-aware, not lexical — see the
+ * already-declared check in `parseDecisionsSection`.
+ */
+const DECISION_HEAD_RE = /^###\s+(D-\d{3,})(?=\s|[-–—:]|$)\s*(?:[-–—]\s*)?(.*)$/;
 
-function parseDecisionsSection(section: RawSection): PlanDecision[] {
+function parseDecisionsSection(section: RawSection, notices: string[]): PlanDecision[] {
   const decisions: PlanDecision[] = [];
+  const declared = new Set<string>();
   let current: PlanDecision | null = null;
   let bodyBuf: string[] = [];
 
@@ -460,10 +492,27 @@ function parseDecisionsSection(section: RawSection): PlanDecision[] {
       continue;
     }
     const m = DECISION_HEAD_RE.exec(line);
+    const id = m ? (m[1] ?? '') : '';
+    // A decision id is unique by definition (lint enforces it), so a heading
+    // bearing an id ALREADY declared in this section structurally cannot be a
+    // second declaration — it is prose inside the current decision's body
+    // (`### D-053 held, and is now pinned by tests at three levels`). Treating
+    // it as a declaration is what minted phantom decisions and duplicate-id
+    // errors. This is a NOTICE, never a parse warning: a warning becomes a lint
+    // error, which is precisely the wedge this fix exists to remove.
+    if (m && declared.has(id)) {
+      notices.push(
+        `Decision heading at line ${section.startLine + i + 1} re-uses already-declared decision id ${id} — ` +
+          `read as body of ${current?.id ?? '(no open decision)'}, not a second declaration.`,
+      );
+      if (current) bodyBuf.push(line);
+      continue;
+    }
     if (m) {
       flush();
+      declared.add(id);
       current = {
-        id: m[1] ?? '',
+        id,
         title: (m[2] ?? '').trim(),
         body: '',
         date: null,
@@ -489,6 +538,7 @@ export function parsePlan(source: string, opts: ParseOptions = {}): ParsedPlan {
 
   const { fm, body } = splitFrontmatter(source);
   const { result: frontmatter, warnings, ok: fmOk } = parseFrontmatter(fm);
+  const notices: string[] = [];
 
   const isLegacy = !fmOk || !frontmatter.slug || !frontmatter.status;
 
@@ -509,7 +559,7 @@ export function parsePlan(source: string, opts: ParseOptions = {}): ParsedPlan {
     }
 
     if (section.level === 2 && /^Decisions$/i.test(norm)) {
-      decisions = parseDecisionsSection(section);
+      decisions = parseDecisionsSection(section, notices);
       continue;
     }
 
@@ -565,6 +615,7 @@ export function parsePlan(source: string, opts: ParseOptions = {}): ParsedPlan {
     raw: source,
     isLegacy,
     parseWarnings: warnings,
+    parseNotices: notices,
   };
 }
 
@@ -582,6 +633,71 @@ export function parsePlan(source: string, opts: ParseOptions = {}): ParsedPlan {
  * mistaken for the real structural element. This matches the parser,
  * which already ignores fenced regions.
  */
+/**
+ * Demote headings in a DECISION BODY so none of them can break the plan's
+ * section structure (EI-18804290731494084).
+ *
+ * `splitSections` splits on every `#` / `##` heading outside a fence, so a
+ * decision body containing one ENDS the `## Decisions` section: the decision's
+ * body is truncated at that line and the remainder is promoted to top-level
+ * plan sections. Observed live on unified-agent-state-plane-2026-07-27 — D-057
+ * and D-083 were each cut to their first paragraph and 32 orphaned `##`
+ * sections appeared after `## Decisions`. Nothing is lost from the file; the
+ * STRUCTURE is what is destroyed, which is why it is silent.
+ *
+ * The fix belongs at the point of authorship (a structural tier, not a
+ * documented convention): every heading is shifted by the same delta so the
+ * shallowest becomes `####`, preserving relative structure.
+ *
+ * ⚠ The target is level 4, NOT 3, and the extra level is the whole point. At
+ * `###` a body heading is still AT THE DECLARATION LEVEL, so a body containing
+ * `### D-001 mentioned in prose` mints a phantom D-001 — a property test caught
+ * exactly this, with an id not yet declared, which no amount of parser
+ * cleverness can distinguish from a real head. Demoting one level further makes
+ * the invariant total and checkable: **a normalized decision body contains no
+ * heading at level ≤ 3**, therefore it can be neither a section break nor a
+ * decision declaration. The parser-side rules stay as defence in depth for
+ * bodies written through the raw `plans:edit` / `plans:set-content` paths, which
+ * this normalizer never sees.
+ *
+ * Fenced regions are left alone: a worked example containing `## Now` is
+ * content, not a heading.
+ */
+export function normalizeDecisionBodyHeadings(body: string): { body: string; normalized: number } {
+  const lines = body.split('\n');
+  const headingAt = new Map<number, { hashes: string; rest: string }>();
+  let inFence = false;
+  let minLevel = Infinity;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (/^\s*(?:```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = /^(#{1,6})(\s+.*)$/.exec(line);
+    if (!m) continue;
+    const hashes = m[1] ?? '';
+    headingAt.set(i, { hashes, rest: m[2] ?? '' });
+    minLevel = Math.min(minLevel, hashes.length);
+  }
+
+  if (minLevel >= 4 || headingAt.size === 0) return { body, normalized: 0 };
+
+  const delta = 4 - minLevel;
+  let normalized = 0;
+  for (const [i, h] of headingAt) {
+    // Clamp at h6 — markdown has no deeper heading. A body nested that far is
+    // pathological, and flattening the last level is far better than emitting
+    // `#######`, which renders as literal text.
+    const level = Math.min(6, h.hashes.length + delta);
+    lines[i] = '#'.repeat(level) + h.rest;
+    normalized++;
+  }
+  return { body: lines.join('\n'), normalized };
+}
+
 export function maskFences(body: string): string {
   const lines = body.split('\n');
   let inFence = false;
