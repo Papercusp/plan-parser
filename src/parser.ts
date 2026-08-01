@@ -114,6 +114,24 @@ export interface PlanDecision {
   lineNumber: number;
 }
 
+/**
+ * WHY `isLegacy` fired (`null` when it didn't) — EI-18793956567250851.
+ * `legacy_plan` alone reads as "unsupported, give up"; this names the actual
+ * condition so a caller (and the `legacy_plan` error responses that key off
+ * it) can point at a concrete repair instead of a dead end.
+ *
+ * `frontmatter_displaced` is the sharpest case: a well-formed `---`-delimited
+ * block (with both `slug` and `status`) exists somewhere in the file, just not
+ * at position 0 — the file is mechanically repairable (move the block to the
+ * top), not genuinely legacy/unstructured.
+ */
+export type LegacyReason =
+  | 'no_frontmatter'
+  | 'frontmatter_displaced'
+  | 'missing_slug'
+  | 'missing_status'
+  | 'invalid_status';
+
 export interface ParsedPlan {
   slug: string;
   filePath: string;
@@ -128,6 +146,7 @@ export interface ParsedPlan {
    *  visible truth (D-001 of plans-admin-ui-2026-05-20). */
   raw: string;
   isLegacy: boolean;
+  legacyReason: LegacyReason | null;
   parseWarnings: string[];
   /**
    * Non-blocking parse observations (EI-18804290731494084).
@@ -180,6 +199,37 @@ function splitFrontmatter(source: string): { fm: string | null; body: string } {
   const afterClose = source.indexOf('\n', close + 4);
   const body = afterClose === -1 ? '' : source.slice(afterClose + 1);
   return { fm, body };
+}
+
+/**
+ * EI-18793956567250851: when `splitFrontmatter` finds nothing at position 0,
+ * check whether a genuine frontmatter block simply ended up further down the
+ * file (e.g. an agent prepended a `## Now` block ABOVE the existing `---`
+ * block instead of below it) — as opposed to the file never having had one at
+ * all. Scans every `---`-delimited span in the raw source (not just the
+ * first) and accepts the first one that parses with both `slug` and `status`
+ * — that pair is exactly `isLegacy`'s own trigger condition, so a match here
+ * really is a repairable displacement, not a coincidental `---` (a markdown
+ * horizontal rule, or a decision-body dash) reads as a false positive.
+ */
+function findDisplacedFrontmatter(
+  source: string,
+): { lineNumber: number; endLineNumber: number } | null {
+  const lines = source.split('\n');
+  const dashLines: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if ((lines[i] ?? '').trim() === '---') dashLines.push(i);
+  }
+  for (let i = 0; i + 1 < dashLines.length; i++) {
+    const start = dashLines[i] as number;
+    const end = dashLines[i + 1] as number;
+    const block = lines.slice(start + 1, end).join('\n');
+    const { result, ok } = parseFrontmatter(block);
+    if (ok && result.slug && result.status) {
+      return { lineNumber: start + 1, endLineNumber: end + 1 };
+    }
+  }
+  return null;
 }
 
 /**
@@ -542,6 +592,31 @@ export function parsePlan(source: string, opts: ParseOptions = {}): ParsedPlan {
 
   const isLegacy = !fmOk || !frontmatter.slug || !frontmatter.status;
 
+  // EI-18793956567250851: name WHY, so a `legacy_plan` refusal downstream can
+  // point at a concrete repair instead of reading as "unsupported, give up".
+  let legacyReason: LegacyReason | null = null;
+  if (isLegacy) {
+    if (!fmOk) {
+      const displaced = findDisplacedFrontmatter(source);
+      if (displaced) {
+        legacyReason = 'frontmatter_displaced';
+        notices.push(
+          `Legacy plan: a well-formed frontmatter block (with both slug + status) was found at ` +
+            `line ${displaced.lineNumber}-${displaced.endLineNumber}, but frontmatter must be at the ` +
+            `very top of the file (position 0) to parse — everything needed is present, just too late. ` +
+            `Repair: move that '---'-delimited block to line 1 (plans:set-content / plans:set-content-chunk), ` +
+            `then re-check isLegacy.`,
+        );
+      } else {
+        legacyReason = 'no_frontmatter';
+      }
+    } else if (!frontmatter.slug) {
+      legacyReason = 'missing_slug';
+    } else if (!frontmatter.status) {
+      legacyReason = frontmatter.raw.status !== undefined ? 'invalid_status' : 'missing_status';
+    }
+  }
+
   const sections = splitSections(body);
 
   let now: PlanNowBlock | null = null;
@@ -614,6 +689,7 @@ export function parsePlan(source: string, opts: ParseOptions = {}): ParsedPlan {
     prose: body,
     raw: source,
     isLegacy,
+    legacyReason,
     parseWarnings: warnings,
     parseNotices: notices,
   };
