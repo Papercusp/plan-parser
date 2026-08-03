@@ -67,6 +67,50 @@ describe('resolveEffectiveStatus', () => {
   });
 });
 
+// ── EI-19412899868617052: a TERMINAL stored token beats the blocked-by graph.
+// The graph gates work that has NOT happened; it must never re-open work that
+// already has. Before this, a stored `done` item whose dependency was merely
+// still running derived `blocked`, and `system:plan-item-lane-sync` then held
+// the linked work-item open so it could never be closed except with force.
+describe('terminal stored status vs an unresolved blocker', () => {
+  it('keeps a stored `done` item done even while its blocker is still wip', () => {
+    const r = resolve(item('A', 'done', ['B']), item('B', 'wip'));
+    expect(eff(r, 'A').effectiveStatus).toBe('done');
+    expect(eff(r, 'A').unresolvedBlockers).toEqual([]);
+  });
+
+  it('keeps a stored `dropped` item dropped even while its blocker is still todo', () => {
+    const r = resolve(item('A', 'dropped', ['B']), item('B', 'todo'));
+    expect(eff(r, 'A').effectiveStatus).toBe('dropped');
+  });
+
+  it('surfaces the now-stale edge as a diagnostic hint, without changing the status', () => {
+    const a = eff(resolve(item('A', 'done', ['B']), item('B', 'wip')), 'A');
+    expect(a.effectiveStatus).toBe('done');
+    expect(a.staleBlockedHint).toMatch(/cannot be\s+blocked/);
+    expect(a.staleBlockedHint).toContain('B');
+  });
+
+  it('leaves the hint null for a done item whose blockers all resolved', () => {
+    const r = resolve(item('A', 'done', ['B']), item('B', 'done'));
+    expect(eff(r, 'A').effectiveStatus).toBe('done');
+    expect(eff(r, 'A').staleBlockedHint).toBeNull();
+  });
+
+  it('still blocks a NON-terminal item whose blocker is unresolved (the guard must keep biting)', () => {
+    const r = resolve(item('A', 'todo', ['B']), item('B', 'wip'), item('C', 'wip', ['B']));
+    expect(eff(r, 'A').effectiveStatus).toBe('blocked');
+    expect(eff(r, 'C').effectiveStatus).toBe('blocked');
+    expect(eff(r, 'A').unresolvedBlockers).toEqual(['B']);
+  });
+
+  it('keeps a missing blocked-by ref blocking a non-terminal item but not a done one', () => {
+    const r = resolve(item('A', 'todo', ['X']), item('D', 'done', ['X']));
+    expect(eff(r, 'A').effectiveStatus).toBe('blocked');
+    expect(eff(r, 'D').effectiveStatus).toBe('done');
+  });
+});
+
 // ── EI-19397307303043951: staleBlockedHint — the "stored blocked never gets
 // re-evaluated when its blocked-by dependency completes" diagnostic ─────────
 describe('resolveEffectiveStatus — staleBlockedHint (EI-19397307303043951)', () => {

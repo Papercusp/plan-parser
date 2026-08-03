@@ -44,6 +44,16 @@ export interface ResolvedItem extends PlanItem {
    */
   needsHuman: boolean;
   /**
+   * Non-null when the stored token and the blocked-by graph DISAGREE. Two
+   * directions, both purely diagnostic:
+   *
+   *  1. EI-19397307303043951 (below) — stored `blocked`, every dependency
+   *     resolved. effectiveStatus stays `blocked` via the sticky token.
+   *  2. EI-19412899868617052 — stored `done`/`dropped` with a dependency still
+   *     unresolved. effectiveStatus is the TERMINAL token (a completed item
+   *     cannot be blocked); the hint reports the now-stale edge so a plan
+   *     author can drop or repoint it.
+   *
    * EI-19397307303043951: non-null when the stored `blocked` token and the
    * blocked-by graph now DISAGREE — every listed blocked-by dependency has
    * resolved (done/dropped) yet effectiveStatus is still forced `blocked` by
@@ -180,6 +190,46 @@ export function resolveEffectiveStatusForItems(planItems: PlanItem[]): ResolveRe
             `another reason, record that in a plan Decision.`
           : null;
       return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: unresolved, needsHuman, staleBlockedHint };
+    }
+
+    // EI-19412899868617052: a TERMINAL stored token wins over the blocked-by
+    // graph. The graph exists to gate work that has NOT happened; it must never
+    // re-open work that already has — a completed item cannot be "blocked".
+    //
+    // Without this short-circuit the branch below fires for a stored `done`
+    // item whose dependency is merely still running, and the mislabel is not
+    // cosmetic: `system:plan-item-lane-sync` reads effectiveStatus and HOLDS the
+    // linked work-item open, so `work_items:complete` refuses it and the item
+    // stays claimable forever. Flipping the plan item to `done` does not clear
+    // that — it is precisely the state that triggers it — so the only escapes
+    // were `force: true` or editing the plan graph, i.e. the trap pushed every
+    // agent who hit it into overriding a guard that is usually right.
+    //
+    // Measured live on prose-embedding-384-untrained-mrl-fix-2026-08-02: P-007
+    // stored `done`, blockedBy ['P-006'], P-006 legitimately still `wip` (a ~28h
+    // refill) — the normal "migrate, then verify" shape where the dependent
+    // finishes early against a partial result it only needed part of.
+    //
+    // Deliberately placed AFTER the cycle and sticky stored-`blocked` branches:
+    // a blocked-by CYCLE is a structural plan-authoring error worth keeping loud
+    // (and it is reported separately via `cycleMembers`), and a stored `blocked`
+    // token is documented above as intentionally sticky.
+    if (it.storedStatus === 'done' || it.storedStatus === 'dropped') {
+      const staleBlockedHint =
+        unresolved.length > 0
+          ? `stored status is '${it.storedStatus}' but blocked-by dependency (${unresolved.join(', ')}) ` +
+            `has not resolved — effectiveStatus is '${it.storedStatus}' because a completed item cannot be ` +
+            `blocked. The edge is likely stale, or was only partly required (the dependent finished against ` +
+            `a partial result). Drop or repoint the blocked-by edge with plans:set-content if it no longer ` +
+            `holds; if the dependency really was required in full, this item may have been closed early.`
+          : null;
+      return {
+        ...it,
+        effectiveStatus: it.storedStatus,
+        unresolvedBlockers: [],
+        needsHuman,
+        staleBlockedHint,
+      };
     }
 
     if (unresolved.length > 0) {
