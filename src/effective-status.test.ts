@@ -67,6 +67,56 @@ describe('resolveEffectiveStatus', () => {
   });
 });
 
+// ── EI-19397307303043951: staleBlockedHint — the "stored blocked never gets
+// re-evaluated when its blocked-by dependency completes" diagnostic ─────────
+describe('resolveEffectiveStatus — staleBlockedHint (EI-19397307303043951)', () => {
+  it('is null for a plain unblocked item', () => {
+    const r = resolve(item('A', 'todo'));
+    expect(eff(r, 'A').staleBlockedHint).toBeNull();
+  });
+
+  it('is null for a stored-blocked item with NO blocked-by (the legitimate external-block case)', () => {
+    const r = resolve(item('A', 'blocked'));
+    expect(eff(r, 'A').effectiveStatus).toBe('blocked');
+    expect(eff(r, 'A').staleBlockedHint).toBeNull();
+  });
+
+  it('is null while the blocked-by dependency is still unresolved (no false alarm)', () => {
+    const r = resolve(item('A', 'blocked', ['B']), item('B', 'todo'));
+    expect(eff(r, 'A').effectiveStatus).toBe('blocked');
+    expect(eff(r, 'A').unresolvedBlockers).toEqual(['B']);
+    expect(eff(r, 'A').staleBlockedHint).toBeNull();
+  });
+
+  it('fires once every blocked-by dependency is done, WITHOUT changing effectiveStatus', () => {
+    const r = resolve(item('A', 'blocked', ['B']), item('B', 'done'));
+    // The trap this closes: effectiveStatus stays 'blocked' (the stored token
+    // is sticky by design — see the module docstring) even though
+    // unresolvedBlockers is now empty. staleBlockedHint is what makes that
+    // contradiction legible instead of silently confusing.
+    expect(eff(r, 'A').effectiveStatus).toBe('blocked');
+    expect(eff(r, 'A').unresolvedBlockers).toEqual([]);
+    expect(eff(r, 'A').staleBlockedHint).toMatch(/already resolved/);
+    expect(eff(r, 'A').staleBlockedHint).toMatch(/plans:set-status/);
+  });
+
+  it('fires the same way when the dependency resolved via dropped, not done', () => {
+    const r = resolve(item('A', 'blocked', ['B']), item('B', 'dropped'));
+    expect(eff(r, 'A').unresolvedBlockers).toEqual([]);
+    expect(eff(r, 'A').staleBlockedHint).not.toBeNull();
+  });
+
+  it('never auto-clears effectiveStatus even when staleBlockedHint fires — a deliberate post-dependency re-block (the P-011/D-016 shape) must survive unchanged', () => {
+    // Mirrors a real live case: an item explicitly re-blocked BY RULING after
+    // its blocked-by dependency already completed. The resolver cannot tell
+    // this apart from the trap by data alone, so it must stay conservative:
+    // effectiveStatus stays 'blocked', only the diagnostic hint changes.
+    const r = resolve(item('P-011', 'blocked', ['P-010']), item('P-010', 'done'));
+    expect(eff(r, 'P-011').effectiveStatus).toBe('blocked');
+    expect(eff(r, 'P-011').staleBlockedHint).not.toBeNull();
+  });
+});
+
 // ── B-12 / P-072: the DERIVED needs-human top band the DONE-gate keys on ──────
 describe('resolveEffectiveStatus — derived needsHuman (B-12 / P-072)', () => {
   const pi = (p: Partial<PlanItem> & { id: string; storedStatus: ItemStatus }): PlanItem =>

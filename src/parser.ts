@@ -30,6 +30,22 @@ import {
 export const PLAN_STATUSES = ['draft', 'ready', 'active', 'shipped', 'superseded'] as const;
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
 
+/**
+ * Terminal plan-lifecycle statuses — the plan is finished, not in flight.
+ *
+ * Lives here, beside {@link PLAN_STATUSES}, because it is pure status grammar
+ * with no I/O: the operator's `plan-start-state.ts` re-exports it (that module
+ * imports `@papercusp/db-org`, so consumers that must stay dependency-free —
+ * e.g. the `coord.plans` sync projection — could not reach the predicate there
+ * without dragging Postgres across their boundary).
+ */
+export const TERMINAL_PLAN_STATUSES = ['shipped', 'superseded'] as const;
+
+/** True when the plan's lifecycle status is terminal (shipped/superseded). */
+export function isTerminalPlanStatus(status: string | null | undefined): boolean {
+  return status === 'shipped' || status === 'superseded';
+}
+
 export const ITEM_STATUSES = [
   'todo',
   'wip',
