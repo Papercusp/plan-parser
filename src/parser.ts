@@ -412,10 +412,44 @@ function parseNow(section: RawSection): PlanNowBlock | null {
 const ITEM_LINE_RE =
   /^[-*]\s+\*\*\s*(P-\d{3,})\s*\*\*\s+`([a-z-]+)`\s+(.*)$/;
 
+/**
+ * Is this line a HANGING-INDENT CONTINUATION of the item bullet above it?
+ *
+ * Wrapping a long item under a hanging indent is the normal way an author
+ * writes one, and every physical line after the first used to be dropped on
+ * the floor — the item was stored as its first line only, ending mid-clause
+ * (EI-19403572587513008: 23 live items across 3 plans, the worst of them
+ * promoted to a work-item whose entire brief was `**Cut queries-per-screen.**
+ * Coarser reads for above-the-fold data, defer`). Nothing errored and the
+ * plan's `content` still rendered correctly, so the failure presented to the
+ * claiming agent as "this plan item is vague", never as "this is truncated".
+ *
+ * Deliberately CONSERVATIVE: a line only continues the item when it is
+ * indented, non-blank, and is not itself the start of another block. Stopping
+ * early merely preserves the old behavior for that line, whereas folding a
+ * block element in would corrupt the item — so every ambiguous shape stops.
+ */
+function isItemContinuation(line: string): boolean {
+  if (!/^[ \t]/.test(line)) return false; // must be indented under the bullet
+  const t = line.trim();
+  if (t === '') return false; // a blank line ends the item
+  if (/^(?:[-*+]|\d+[.)])\s/.test(t)) return false; // a new / nested list bullet
+  if (/^#{1,6}\s/.test(t)) return false; // a heading
+  if (/^(?:```|~~~)/.test(t)) return false; // a fence
+  if (/^[|>]/.test(t)) return false; // a table row or blockquote
+  return true;
+}
+
 function parseItemLine(
   line: string,
   lineNumber: number,
   phase: string | null,
+  /** The FIRST PHYSICAL source line, when `line` is a folded logical line.
+   *  `rawLine` must stay physical: `detectUnparsedItemLines` (lint.ts,
+   *  item-parse-feedback.ts) matches it against the source's own lines to find
+   *  item-shaped lines that did NOT parse, so handing it a folded line would
+   *  report every wrapped item as unparsed. */
+  rawLine: string = line,
 ): PlanItem | null {
   const m = ITEM_LINE_RE.exec(line);
   if (!m) return null;
@@ -500,7 +534,7 @@ function parseItemLine(
     decisionRefs,
     phase,
     lineNumber,
-    rawLine: line,
+    rawLine,
   };
 }
 
@@ -668,8 +702,26 @@ export function parsePlan(source: string, opts: ParseOptions = {}): ParsedPlan {
         continue;
       }
       if (inFence) continue;
-      const item = parseItemLine(line, section.startLine + i + 1, currentPhase);
-      if (item) items.push(item);
+      // Fold hanging-indent continuation lines into ONE logical line before
+      // parsing, joined with a space rather than a newline: the renderer emits
+      // an item as a single `- **P-NNN** \`status\` text` line, so a newline
+      // here would break round-trip. Parsing the folded line (not just
+      // concatenating text afterwards) is what lets `blocked-by:`/`importance:`
+      // /`risk:`/`authority:` keywords be honoured wherever they wrapped to.
+      let logical = line;
+      let consumed = 0;
+      if (ITEM_LINE_RE.test(line)) {
+        for (let j = i + 1; j < section.body.length; j++) {
+          if (!isItemContinuation(section.body[j] ?? '')) break;
+          logical += ' ' + (section.body[j] ?? '').trim();
+          consumed++;
+        }
+      }
+      const item = parseItemLine(logical, section.startLine + i + 1, currentPhase, line);
+      if (item) {
+        items.push(item);
+        i += consumed;
+      }
     }
   }
 
