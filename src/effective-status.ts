@@ -43,6 +43,27 @@ export interface ResolvedItem extends PlanItem {
    * `storedStatus === 'needs-human'` until the owner arms autonomy (P-092).
    */
   needsHuman: boolean;
+  /**
+   * EI-19397307303043951: non-null when the stored `blocked` token and the
+   * blocked-by graph now DISAGREE — every listed blocked-by dependency has
+   * resolved (done/dropped) yet effectiveStatus is still forced `blocked` by
+   * the sticky stored token (see the module docstring). This is exactly the
+   * failure that presents as its own opposite: `plans:get-item` shows
+   * `unresolvedBlockers: []` right next to `effectiveStatus: 'blocked'`, a
+   * caller reads that as "the lane is drained", and scheduler:get_next never
+   * serves the linked work-item — real claimable work goes invisible.
+   *
+   * PURELY DIAGNOSTIC — never changes `effectiveStatus`. A stored `blocked`
+   * kept for a genuinely external/deliberate reason (e.g. re-blocked by a
+   * plan Decision after its blocked-by dependency resolved, as opposed to a
+   * dependency-derived block that simply never got cleared) is a legitimate
+   * case this module cannot distinguish from the trap by data alone — so it
+   * never auto-clears the token. It only surfaces the contradiction so a
+   * reader can act: clear the stored token with `plans:set-status` if the
+   * block really was blocked-by-derived, or leave it and record why in a
+   * plan Decision if it is deliberately still blocked for another reason.
+   */
+  staleBlockedHint: string | null;
 }
 
 /**
@@ -128,7 +149,13 @@ export function resolveEffectiveStatusForItems(planItems: PlanItem[]): ResolveRe
     const needsHuman = deriveItemNeedsHuman(it);
 
     if (inCycle.has(it.id)) {
-      return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: it.blockedBy, needsHuman };
+      return {
+        ...it,
+        effectiveStatus: 'blocked',
+        unresolvedBlockers: it.blockedBy,
+        needsHuman,
+        staleBlockedHint: null,
+      };
     }
 
     const unresolved: string[] = [];
@@ -144,14 +171,34 @@ export function resolveEffectiveStatusForItems(planItems: PlanItem[]): ResolveRe
     }
 
     if (it.storedStatus === 'blocked') {
-      return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: unresolved, needsHuman };
+      const staleBlockedHint =
+        it.blockedBy.length > 0 && unresolved.length === 0
+          ? `stored status is 'blocked' but every blocked-by dependency (${it.blockedBy.join(', ')}) has ` +
+            `already resolved (done/dropped) — effectiveStatus stays 'blocked' because the stored token is ` +
+            `sticky (reserved for external blockers) until someone clears it. If this block was purely ` +
+            `blocked-by-derived, clear it with plans:set-status; if it is deliberately still blocked for ` +
+            `another reason, record that in a plan Decision.`
+          : null;
+      return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: unresolved, needsHuman, staleBlockedHint };
     }
 
     if (unresolved.length > 0) {
-      return { ...it, effectiveStatus: 'blocked', unresolvedBlockers: unresolved, needsHuman };
+      return {
+        ...it,
+        effectiveStatus: 'blocked',
+        unresolvedBlockers: unresolved,
+        needsHuman,
+        staleBlockedHint: null,
+      };
     }
 
-    return { ...it, effectiveStatus: it.storedStatus, unresolvedBlockers: [], needsHuman };
+    return {
+      ...it,
+      effectiveStatus: it.storedStatus,
+      unresolvedBlockers: [],
+      needsHuman,
+      staleBlockedHint: null,
+    };
   });
 
   return { items, missingRefs, cycleMembers };
