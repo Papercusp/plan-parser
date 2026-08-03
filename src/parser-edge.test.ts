@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { parsePlan } from './parser';
+import { renderPlanMarkdown } from './renderer';
 
 const lines = (...l: string[]) => l.join('\n');
 
@@ -92,5 +93,96 @@ describe('parsePlan — structure', () => {
     const p = parsePlan(VALID);
     expect(p.now?.state).toMatch(/building/);
     expect(p.now?.next).toMatch(/ship it/);
+  });
+});
+
+/**
+ * Hanging-indent CONTINUATION lines (EI-19403572587513008).
+ *
+ * A long item is normally written wrapped under a hanging indent. Every
+ * physical line after the first used to be dropped, so the item was stored as
+ * a sentence fragment — and because nothing errored and `content` still
+ * rendered fine, it read to the claiming agent as a vague item rather than a
+ * truncated one. The first test is the recurrence guard: the LAST line's
+ * content must survive.
+ */
+describe('parsePlan — hanging-indent continuation lines', () => {
+  // Verbatim from no-http-anywhere-2026-07-28 P-008, the item this was found on.
+  const WRAPPED = lines(
+    '---', 'slug: p', 'status: active', '---', '',
+    '## Phase 1',
+    '- **P-008** `todo` **Cut queries-per-screen.** Coarser reads for above-the-fold data, defer',
+    '  below-the-fold, kill duplicates found in P-002. A screen needing 106 round-trips is the condition',
+    '  the gate exists to manage; removing the wave beats scheduling it.',
+  );
+
+  it('folds a 3-line hanging-indent item, keeping the LAST line', () => {
+    const [item] = parsePlan(WRAPPED).items;
+    expect(item.id).toBe('P-008');
+    // The exact regression: it used to end mid-clause on the word "defer".
+    expect(item.text).not.toMatch(/defer$/);
+    expect(item.text).toContain('below-the-fold, kill duplicates');
+    expect(item.text).toContain('removing the wave beats scheduling it.');
+  });
+
+  it('keeps rawLine PHYSICAL so unparsed-line detection still matches the source', () => {
+    const [item] = parsePlan(WRAPPED).items;
+    // detectUnparsedItemLines (lint.ts / item-parse-feedback.ts) looks each
+    // parsed rawLine up among the source's own lines; a folded value here
+    // would report every wrapped item as an unparsed item line.
+    expect(WRAPPED.split('\n')).toContain(item.rawLine);
+    expect(item.rawLine).toMatch(/defer$/);
+  });
+
+  it('round-trips through the renderer as ONE line', () => {
+    const rendered = renderPlanMarkdown(parsePlan(WRAPPED));
+    const itemLines = rendered.split('\n').filter((l) => l.includes('P-008'));
+    expect(itemLines).toHaveLength(1);
+    // Re-parsing the render is stable and still carries the tail.
+    expect(parsePlan(rendered).items[0].text).toBe(parsePlan(WRAPPED).items[0].text);
+  });
+
+  it('honours a keyword that wrapped onto a continuation line', () => {
+    const [item] = parsePlan(
+      lines(
+        '---', 'slug: p', 'status: active', '---', '',
+        '## Phase 1',
+        '- **P-001** `todo` a long item whose keywords wrapped onto the next',
+        '  line entirely blocked-by: P-002 importance: high',
+      ),
+    ).items;
+    expect(item.blockedBy).toEqual(['P-002']);
+    expect(item.importance).toBe('high');
+    expect(item.text).toContain('line entirely');
+    expect(item.text).not.toMatch(/blocked-by|importance/);
+  });
+
+  it('stops at a blank line, a sibling bullet, a nested bullet and a fence', () => {
+    const p = parsePlan(
+      lines(
+        '---', 'slug: p', 'status: active', '---', '',
+        '## Phase 1',
+        '- **P-001** `todo` first',
+        '  continues here',
+        '',
+        '  a detached paragraph that is NOT part of P-001',
+        '- **P-002** `todo` second',
+        '  also continues',
+        '  - a nested bullet that is NOT folded',
+        '- **P-003** `todo` third',
+        '  ```',
+        '  fenced, not folded',
+        '  ```',
+      ),
+    );
+    expect(p.items.map((i) => i.id)).toEqual(['P-001', 'P-002', 'P-003']);
+    expect(p.items[0].text).toBe('first continues here');
+    expect(p.items[1].text).toBe('second also continues');
+    expect(p.items[2].text).toBe('third');
+  });
+
+  it('leaves an unwrapped item exactly as before', () => {
+    const p = parsePlan(VALID);
+    expect(p.items.map((i) => i.text)).toEqual(['do a thing', 'did a thing']);
   });
 });
