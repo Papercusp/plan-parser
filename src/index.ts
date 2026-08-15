@@ -15,3 +15,4 @@ export * from './content-hash';
 export * from './renderer';
 export * from './parts';
 export * from './spec-triad';
+export * from './project-history';
