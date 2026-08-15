@@ -3,6 +3,7 @@ import {
   assembleProjectHistory,
   assertProjectHistoryDocument,
   completedWorkItemsFromPlan,
+  generateProjectHistory,
   projectHistoryCommitUrl,
 } from './project-history';
 
@@ -158,5 +159,56 @@ describe('Project History v1', () => {
       attribution: 'inferred',
     });
     expect(() => assertProjectHistoryDocument(invalid)).toThrow(/invalid commit sha/);
+  });
+
+  it('loads provider records once and attaches unscoped work items only where plans reference them', async () => {
+    const secondMarkdown = MARKDOWN
+      .replace('Demo release', 'Second release')
+      .replace('demo-release-2026-08-14', 'second-release-2026-08-14')
+      .replaceAll('WI-100', 'WI-200');
+    const requested: string[][] = [];
+
+    const document = await generateProjectHistory({
+      project,
+      source,
+      provider: {
+        async loadPlans() {
+          return [{ markdown: MARKDOWN }, { markdown: secondMarkdown }];
+        },
+        async loadWorkItems(ids) {
+          requested.push([...ids]);
+          return ids.map((id) => ({
+            id,
+            kind: 'feature',
+            title: `Ledger ${id}`,
+            state: 'done',
+            completedAt: '2026-08-14T20:15:00.000Z',
+            completionAuthority: 'work-item-ledger',
+            completionSummary: 'Verified.',
+            completionEvidence: { provider: true },
+          }));
+        },
+        async loadCommits(ids) {
+          requested.push([...ids]);
+          return [{
+            sha: 'abc1234def5678',
+            links: [{ workItemId: 'WI-200', attribution: 'authoritative' }],
+          }];
+        },
+      },
+    });
+
+    expect(requested).toEqual([
+      ['WI-100', 'WI-200'],
+      ['WI-100', 'WI-200'],
+    ]);
+    expect(document.plans[0]?.completedItems.map((item) => item.id)).toEqual(['WI-100']);
+    expect(document.plans[1]?.completedItems).toEqual([
+      expect.objectContaining({
+        id: 'WI-200',
+        title: 'Ledger WI-200',
+        commits: [expect.objectContaining({ attribution: 'authoritative' })],
+      }),
+    ]);
   });
 });

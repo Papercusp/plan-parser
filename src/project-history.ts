@@ -141,6 +141,23 @@ export interface AssembleProjectHistoryInput {
   commits?: readonly ProjectHistoryCommitInput[];
 }
 
+/**
+ * I/O boundary for Project History generation. Implementations may read the
+ * Papercusp ledgers, a fixture directory, or another compatible store; the
+ * assembler itself remains pure and product-neutral.
+ */
+export interface ProjectHistoryProvider {
+  loadPlans(): Promise<readonly ProjectHistoryPlanInput[]>;
+  loadWorkItems?(ids: readonly string[]): Promise<readonly ProjectHistoryWorkItemInput[]>;
+  loadCommits?(ids: readonly string[]): Promise<readonly ProjectHistoryCommitInput[]>;
+}
+
+export interface GenerateProjectHistoryInput {
+  project: ProjectHistoryProject;
+  source: Omit<ProjectHistorySource, 'planCount'>;
+  provider: ProjectHistoryProvider;
+}
+
 const COMPLETION_MARKER_RE = /\u2190\s+((?:WI|EI|F)-\d+)\s+completed\b/g;
 const NOTE_SUFFIX_RE = /\s+\u2014\s+note:.*$/;
 
@@ -241,6 +258,59 @@ function commitsByWorkItem(
 
 function appliesToPlan(item: ProjectHistoryWorkItemInput, planSlug: string): boolean {
   return !item.planSlugs || item.planSlugs.length === 0 || item.planSlugs.includes(planSlug);
+}
+
+function referencedWorkItems(planInput: ProjectHistoryPlanInput): Set<string> {
+  const parsed = parsePlan(planInput.markdown, { filePath: planInput.filePath });
+  const resolved = resolveEffectiveStatus(parsed);
+  const slug = parsed.frontmatter.slug ?? parsed.slug;
+  const updatedAt = planInput.updatedAt ?? (
+    typeof parsed.frontmatter.updated === 'string' ? parsed.frontmatter.updated : null
+  );
+  const contentHash = hashPlanContent(planInput.markdown);
+  return new Set([
+    ...completedWorkItemsFromPlan(slug, updatedAt, contentHash, resolved.items).map((item) => item.id),
+    ...(planInput.completedItems ?? []).map((item) => item.id),
+  ]);
+}
+
+/**
+ * Load provider data and produce a validated Project History document.
+ * Provider work items without an explicit planSlugs list are attached only to
+ * plans that already reference their id, preserving the plan ledger as the
+ * membership authority.
+ */
+export async function generateProjectHistory(
+  input: GenerateProjectHistoryInput,
+): Promise<ProjectHistoryDocument> {
+  const plans = [...await input.provider.loadPlans()];
+  const references = plans.map(referencedWorkItems);
+  const ids = [...new Set(references.flatMap((values) => [...values]))].sort();
+  const workItems = ids.length > 0 && input.provider.loadWorkItems
+    ? [...await input.provider.loadWorkItems(ids)]
+    : [];
+  const commits = ids.length > 0 && input.provider.loadCommits
+    ? [...await input.provider.loadCommits(ids)]
+    : [];
+
+  return assembleProjectHistory({
+    project: input.project,
+    source: input.source,
+    plans: plans.map((plan, index) => ({
+      ...plan,
+      completedItems: [
+        ...(plan.completedItems ?? []),
+        ...workItems.filter((item) => {
+          if (item.planSlugs && item.planSlugs.length > 0) {
+            const parsed = parsePlan(plan.markdown, { filePath: plan.filePath });
+            return item.planSlugs.includes(parsed.frontmatter.slug ?? parsed.slug);
+          }
+          return references[index]?.has(item.id) ?? false;
+        }),
+      ],
+    })),
+    commits,
+  });
 }
 
 /** Assemble one deterministic Project History v1 document from provider inputs. */
