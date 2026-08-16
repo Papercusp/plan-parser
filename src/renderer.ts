@@ -24,6 +24,7 @@ import {
   type PlanNowBlock,
   type PlanFrontmatter,
   DEFAULT_IMPORTANCE,
+  NOTE_SUFFIX_RE,
 } from './parser';
 import { DEFAULT_AUTHORITY } from './risk-model';
 
@@ -62,23 +63,40 @@ function renderNow(now: PlanNowBlock): string {
  * re-append only the stripped keywords (importance only when non-default).
  */
 function renderItem(item: PlanItem): string {
-  let line = `- **${item.id}** \`${item.storedStatus}\` ${item.text}`;
+  // EI-20577635585381178: keywords MUST be emitted BEFORE any ` — note: …` suffix.
+  // The parser keeps a set-status-injected note inside `item.text`, and
+  // NOTE_SUFFIX_RE (`/\s*—\s*note:.*$/`) matches to END OF LINE. set-status replaces
+  // an existing note with `rest.replace(NOTE_MARKER_RE, '')` before re-appending the
+  // new one, so ANY keyword rendered after the note is swallowed by that strip —
+  // silently destroying `blocked-by:` edges (and importance/risk/authority) on the
+  // next status write. Measured: plan release-build-vm-dev-parity-audit-2026-08-13
+  // item P-006 lost `blocked-by: P-002, P-001` this way and was re-advertised READY,
+  // stalling WI-38602 for 43+ consecutive wakes.
+  //
+  // The parser is order-agnostic for these keywords (each is matched by a bounded
+  // keyword regex, not to end-of-line), so emitting them before the note preserves
+  // the round-trip property and makes the note strictly last.
+  const noteMatch = NOTE_SUFFIX_RE.exec(item.text);
+  const baseText = noteMatch ? item.text.slice(0, noteMatch.index) : item.text;
+  const noteSuffix = noteMatch ? item.text.slice(noteMatch.index) : '';
+
+  let keywords = '';
   if (item.blockedBy.length > 0) {
-    line += ` blocked-by: ${item.blockedBy.join(', ')}`;
+    keywords += ` blocked-by: ${item.blockedBy.join(', ')}`;
   }
   if (item.importance !== DEFAULT_IMPORTANCE) {
-    line += ` importance: ${item.importance}`;
+    keywords += ` importance: ${item.importance}`;
   }
   // Autonomy axes (queen-autonomy-policy B-01) — emit only when non-default so the
   // round-trip stays lean: a tier-less item and a `system`-authority item render
   // exactly as before. The parser strips `risk:`/`authority:` back out on re-parse.
   if (item.riskTier != null) {
-    line += ` risk: ${item.riskTier}`;
+    keywords += ` risk: ${item.riskTier}`;
   }
   if ((item.authority ?? DEFAULT_AUTHORITY) !== DEFAULT_AUTHORITY) {
-    line += ` authority: ${item.authority}`;
+    keywords += ` authority: ${item.authority}`;
   }
-  return line;
+  return `- **${item.id}** \`${item.storedStatus}\` ${baseText}${keywords}${noteSuffix}`;
 }
 
 /** Render one decision: `### D-NNN — title` then its body verbatim (the body
