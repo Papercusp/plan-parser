@@ -289,6 +289,22 @@ export async function generateProjectHistory(
   const workItems = ids.length > 0 && input.provider.loadWorkItems
     ? [...await input.provider.loadWorkItems(ids)]
     : [];
+
+  // A provider that resolves NOTHING for referenced ids is a broken read, not a
+  // project without completed work — and the difference is invisible in the output,
+  // because `completedWorkItemsFromPlan` happily produces a well-formed document
+  // full of evidence-free plan-ledger stubs. That is exactly what shipped: 327 of
+  // 327 items published with no verification, files or commits while the ledger
+  // held 505 evidenced completions (WI-39831). Fail loudly instead of degrading.
+  if (input.provider.loadWorkItems && ids.length > 0 && workItems.length === 0) {
+    throw new Error(
+      `Project History provider resolved 0 work items for ${ids.length} referenced id(s). `
+      + 'Refusing to emit a document built entirely from plan-completion markers: a silent '
+      + 'fallback to the plan-ledger compatibility stub is indistinguishable from real '
+      + 'completion evidence once published. Fix the provider read, or omit loadWorkItems '
+      + 'to declare the marker ledger as the intended authority.',
+    );
+  }
   const commits = ids.length > 0 && input.provider.loadCommits
     ? [...await input.provider.loadCommits(ids)]
     : [];
