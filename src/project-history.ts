@@ -238,7 +238,9 @@ function commitsByWorkItem(
     for (const link of commit.links) {
       const output: ProjectHistoryCommit = {
         sha: commit.sha,
-        url: projectHistoryCommitUrl(repository, commit.sha),
+        // A commit carried in from a secondary repo resolves against ITS OWN repo,
+        // never the project's primary one — see ProjectHistoryCommitInput.repository.
+        url: projectHistoryCommitUrl(commit.repository ?? repository, commit.sha),
         subject: commit.subject ?? null,
         committedAt: commit.committedAt ?? null,
         files: [...new Set(commit.files ?? [])].sort(),
