@@ -99,6 +99,72 @@ describe('Project History v1', () => {
     }]);
   });
 
+  // A product can span repos (SideStage's mobile work lives in sidestage-mobile). Such a
+  // commit MUST resolve against its own repo: pointing it at the primary project yields a
+  // confident 404, which is worse than the no-link state this feature replaced (WI-39898).
+  it('links a commit carried in from a secondary repo to THAT repo, not the primary one', () => {
+    const document = assembleProjectHistory({
+      project,
+      source,
+      plans: [{ markdown: MARKDOWN }],
+      commits: [
+        {
+          sha: 'aaa1111',
+          subject: 'primary repo work',
+          committedAt: '2026-08-14T20:30:00.000Z',
+          files: ['a.ts'],
+          remoteStatus: 'confirmed',
+          links: [{ workItemId: 'WI-100', attribution: 'authoritative' }],
+        },
+        {
+          sha: 'bbb2222',
+          subject: 'mobile repo work',
+          committedAt: '2026-08-14T20:31:00.000Z',
+          files: ['ios/App.swift'],
+          remoteStatus: 'confirmed',
+          links: [{ workItemId: 'WI-100', attribution: 'authoritative' }],
+          repository: {
+            provider: 'github' as const,
+            url: 'git@github.com:Papercusp/demo-mobile.git',
+            webUrl: 'https://github.com/Papercusp/demo-mobile',
+            defaultBranch: 'main',
+          },
+        },
+      ],
+    });
+
+    const urlBySha = new Map(
+      (document.plans[0]?.completedItems[0]?.commits ?? []).map((commit) => [commit.sha, commit.url]),
+    );
+    expect(urlBySha.get('aaa1111')).toBe('https://github.com/Papercusp/demo/commit/aaa1111');
+    expect(urlBySha.get('bbb2222')).toBe('https://github.com/Papercusp/demo-mobile/commit/bbb2222');
+  });
+
+  // The falsifier for the rule above: a secondary repo with no browsable webUrl must yield
+  // a null link rather than silently borrowing the primary repo's URL space.
+  it('yields no link for a secondary-repo commit whose own repo is not browsable', () => {
+    const document = assembleProjectHistory({
+      project,
+      source,
+      plans: [{ markdown: MARKDOWN }],
+      commits: [{
+        sha: 'ccc3333',
+        subject: 'private mirror work',
+        committedAt: '2026-08-14T20:32:00.000Z',
+        files: ['x.ts'],
+        remoteStatus: 'confirmed',
+        links: [{ workItemId: 'WI-100', attribution: 'authoritative' }],
+        repository: {
+          provider: 'git' as const,
+          url: 'ssh://git@internal.example/mirror.git',
+          webUrl: null,
+        },
+      }],
+    });
+
+    expect(document.plans[0]?.completedItems[0]?.commits[0]?.url).toBeNull();
+  });
+
   it('lets an explicit provider item replace the compatibility marker without losing commits', () => {
     const document = assembleProjectHistory({
       project,
