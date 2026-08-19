@@ -119,6 +119,14 @@ export interface ProjectHistoryCommitInput {
   files?: readonly string[];
   remoteStatus?: ProjectHistoryCommitRemoteStatus;
   links: readonly ProjectHistoryCommitLink[];
+  /**
+   * Repository this commit came from, when it is NOT the project's primary repo.
+   * A product can span several repos (SideStage's iOS/Android work lives in
+   * `sidestage-mobile`, not `sidestage`), and a commit's browser URL must resolve
+   * against the repo that actually contains it — otherwise the link 404s, which is
+   * worse than no link. Omit for the primary repo.
+   */
+  repository?: ProjectHistoryRepository | null;
 }
 
 export interface ProjectHistoryWorkItemInput
