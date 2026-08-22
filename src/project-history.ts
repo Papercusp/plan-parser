@@ -420,7 +420,7 @@ export async function generateProjectHistory(
   });
 }
 
-/** Assemble one deterministic Project History v1 document from provider inputs. */
+/** Assemble one deterministic Project History v2 document from provider inputs. */
 export function assembleProjectHistory(
   input: AssembleProjectHistoryInput,
 ): ProjectHistoryDocument {
