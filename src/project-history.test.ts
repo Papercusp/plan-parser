@@ -5,6 +5,7 @@ import {
   completedWorkItemsFromPlan,
   generateProjectHistory,
   projectHistoryCommitUrl,
+  validationAssertionsFromPlan,
 } from './project-history';
 
 const MARKDOWN = `---
@@ -17,6 +18,15 @@ updated: 2026-08-14T20:00:00.000Z
 ## Phase — Build
 
 - **P-001** \`done\` Build the feature — note: ← WI-100 completed (done)
+  - **[VAL-demo-release-2026-08-14-001]**
+    - **Verify:** The delivered page renders the feature.
+    - **Evidence:** tests/history.test.tsx — renders the feature
+    - **Status:** \`passed\`
+  - **[VAL-demo-release-2026-08-14-002]**
+    - **Verify:** The copy matches the approved design.
+    - **Evidence:** Visual inspection
+    - **Status:** \`validating\`
+    - **RequiresTest:** \`false\`
 - **P-002** \`todo\` Verify it blocked-by: P-001
 
 ## Decisions
@@ -46,7 +56,7 @@ const project = {
   },
 };
 
-describe('Project History v1', () => {
+describe('Project History v2', () => {
   it('assembles parsed plan structure and compatibility completion markers', () => {
     const document = assembleProjectHistory({
       project,
@@ -54,7 +64,7 @@ describe('Project History v1', () => {
       plans: [{ markdown: MARKDOWN, filePath: 'demo-release-2026-08-14.md' }],
     });
 
-    expect(document.schemaVersion).toBe(1);
+    expect(document.schemaVersion).toBe(2);
     expect(document.source.planCount).toBe(1);
     expect(document.plans[0]).toMatchObject({
       slug: 'demo-release-2026-08-14',
@@ -66,6 +76,27 @@ describe('Project History v1', () => {
       ['P-002', 'todo'],
     ]);
     expect(document.plans[0]?.decisions[0]?.id).toBe('D-001');
+    expect(document.plans[0]?.items[0]?.validationAssertions).toEqual([
+      expect.objectContaining({
+        id: 'VAL-demo-release-2026-08-14-001',
+        status: 'passed',
+        requiresTest: true,
+        source: 'canonical-plan-inline',
+      }),
+      expect.objectContaining({
+        id: 'VAL-demo-release-2026-08-14-002',
+        status: 'validating',
+        requiresTest: false,
+      }),
+    ]);
+    expect(document.plans[0]?.validationSummary).toEqual({
+      total: 2,
+      passed: 1,
+      failed: 0,
+      validating: 1,
+      todo: 0,
+      requiringTest: 1,
+    });
     expect(document.plans[0]?.completedItems[0]).toMatchObject({
       id: 'WI-100',
       completionAuthority: 'plan-ledger',
@@ -213,7 +244,7 @@ describe('Project History v1', () => {
 
   it('rejects schema drift and invalid commit SHAs at the read boundary', () => {
     const valid = assembleProjectHistory({ project, source, plans: [{ markdown: MARKDOWN }] });
-    expect(() => assertProjectHistoryDocument({ ...valid, schemaVersion: 2 })).toThrow(/schemaVersion/);
+    expect(() => assertProjectHistoryDocument({ ...valid, schemaVersion: 1 })).toThrow(/schemaVersion/);
     const invalid = structuredClone(valid);
     invalid.plans[0]!.completedItems[0]!.commits.push({
       sha: 'not-a-sha',
@@ -225,6 +256,17 @@ describe('Project History v1', () => {
       attribution: 'inferred',
     });
     expect(() => assertProjectHistoryDocument(invalid)).toThrow(/invalid commit sha/);
+  });
+
+  it('parses canonical inline validation blocks and coerces unknown statuses to todo', () => {
+    const assertions = validationAssertionsFromPlan(MARKDOWN.replace('`passed`', '`dropped`'));
+    expect(assertions).toHaveLength(2);
+    expect(assertions[0]).toMatchObject({
+      planItemId: 'P-001',
+      status: 'todo',
+      verify: 'The delivered page renders the feature.',
+      evidenceLocator: 'tests/history.test.tsx — renders the feature',
+    });
   });
 
   it('loads provider records once and attaches unscoped work items only where plans reference them', async () => {

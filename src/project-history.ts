@@ -2,7 +2,29 @@ import { hashPlanContent } from './content-hash';
 import { resolveEffectiveStatus } from './effective-status';
 import { parsePlan, type PlanDecision, type PlanFrontmatter } from './parser';
 
-export const PROJECT_HISTORY_SCHEMA_VERSION = 1 as const;
+export const PROJECT_HISTORY_SCHEMA_VERSION = 2 as const;
+
+export type ProjectHistoryValidationStatus = 'todo' | 'validating' | 'passed' | 'failed';
+
+export interface ProjectHistoryValidationAssertion {
+  id: string;
+  planItemId: string;
+  verify: string;
+  evidenceLocator: string;
+  status: ProjectHistoryValidationStatus;
+  requiresTest: boolean;
+  source: 'canonical-plan-inline';
+  sourceLineNumber: number;
+}
+
+export interface ProjectHistoryValidationSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  validating: number;
+  todo: number;
+  requiringTest: number;
+}
 
 export type ProjectHistoryCommitAttribution =
   | 'authoritative'
@@ -62,6 +84,7 @@ export interface ProjectHistoryPlanItem {
   blockedBy: string[];
   phase: string | null;
   lineNumber: number;
+  validationAssertions: ProjectHistoryValidationAssertion[];
 }
 
 export interface ProjectHistoryDecision {
@@ -84,6 +107,7 @@ export interface ProjectHistoryPlan {
   items: ProjectHistoryPlanItem[];
   decisions: ProjectHistoryDecision[];
   completedItems: ProjectHistoryWorkItem[];
+  validationSummary: ProjectHistoryValidationSummary;
 }
 
 export interface ProjectHistorySource {
@@ -168,6 +192,63 @@ export interface GenerateProjectHistoryInput {
 
 const COMPLETION_MARKER_RE = /\u2190\s+((?:WI|EI|F)-\d+)\s+completed\b/g;
 const NOTE_SUFFIX_RE = /\s+\u2014\s+note:.*$/;
+const PLAN_ITEM_LINE_RE = /^\s*-\s+\*\*(P-\d{3,})\*\*/;
+const VALIDATION_LINE_RE = /^\s*-\s+\*\*\[(VAL-[^\]]+)\]\*\*\s*$/;
+const VALIDATION_FIELD_RE = /^\s*-\s+\*\*(Verify|Evidence|Status|RequiresTest):\*\*\s*(.*)$/i;
+
+/** Parse canonical inline VAL blocks without coupling the portable package to Postgres. */
+export function validationAssertionsFromPlan(markdown: string): ProjectHistoryValidationAssertion[] {
+  const lines = markdown.split(/\r?\n/);
+  const assertions: ProjectHistoryValidationAssertion[] = [];
+  let planItemId: string | null = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const item = line.match(PLAN_ITEM_LINE_RE)?.[1];
+    if (item) {
+      planItemId = item;
+      continue;
+    }
+    const validationId = line.match(VALIDATION_LINE_RE)?.[1];
+    if (!validationId || !planItemId) continue;
+
+    const fields = new Map<string, string>();
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const candidate = lines[cursor] ?? '';
+      if (PLAN_ITEM_LINE_RE.test(candidate) || VALIDATION_LINE_RE.test(candidate) || /^\s*#{1,6}\s/.test(candidate)) break;
+      const match = candidate.match(VALIDATION_FIELD_RE);
+      if (match?.[1]) fields.set(match[1].toLocaleLowerCase(), (match[2] ?? '').trim());
+    }
+    const verify = fields.get('verify') ?? '';
+    const evidenceLocator = fields.get('evidence') ?? '';
+    const rawStatus = fields.get('status')?.replaceAll('`', '').trim().toLocaleLowerCase();
+    const status: ProjectHistoryValidationStatus = rawStatus === 'validating' || rawStatus === 'passed' || rawStatus === 'failed'
+      ? rawStatus
+      : 'todo';
+    assertions.push({
+      id: validationId,
+      planItemId,
+      verify,
+      evidenceLocator,
+      status,
+      requiresTest: fields.get('requirestest')?.replaceAll('`', '').trim().toLocaleLowerCase() !== 'false',
+      source: 'canonical-plan-inline',
+      sourceLineNumber: index + 1,
+    });
+  }
+  return assertions;
+}
+
+function validationSummary(assertions: readonly ProjectHistoryValidationAssertion[]): ProjectHistoryValidationSummary {
+  return {
+    total: assertions.length,
+    passed: assertions.filter((assertion) => assertion.status === 'passed').length,
+    failed: assertions.filter((assertion) => assertion.status === 'failed').length,
+    validating: assertions.filter((assertion) => assertion.status === 'validating').length,
+    todo: assertions.filter((assertion) => assertion.status === 'todo').length,
+    requiringTest: assertions.filter((assertion) => assertion.requiresTest).length,
+  };
+}
 
 function frontmatterRecord(frontmatter: PlanFrontmatter): Record<string, unknown> {
   const { raw: _raw, ...known } = frontmatter;
@@ -352,6 +433,7 @@ export function assembleProjectHistory(
       typeof parsed.frontmatter.updated === 'string' ? parsed.frontmatter.updated : null
     );
     const contentHash = hashPlanContent(planInput.markdown);
+    const validationAssertions = validationAssertionsFromPlan(planInput.markdown);
     const inferred = completedWorkItemsFromPlan(slug, updatedAt, contentHash, resolved.items);
     const byId = new Map(inferred.map((item) => [item.id, item]));
     for (const explicit of planInput.completedItems ?? []) {
@@ -383,9 +465,11 @@ export function assembleProjectHistory(
         blockedBy: [...item.blockedBy],
         phase: item.phase,
         lineNumber: item.lineNumber,
+        validationAssertions: validationAssertions.filter((assertion) => assertion.planItemId === item.id),
       })),
       decisions: parsed.decisions.map(historyDecision),
       completedItems,
+      validationSummary: validationSummary(validationAssertions),
     } satisfies ProjectHistoryPlan;
   });
 
@@ -429,6 +513,19 @@ export function assertProjectHistoryDocument(value: unknown): ProjectHistoryDocu
     }
     slugs.add(plan.slug);
     if (!Array.isArray(plan.completedItems)) throw new TypeError(`Project History ${plan.slug} completedItems must be an array`);
+    if (!Array.isArray(plan.items) || !plan.validationSummary) {
+      throw new TypeError(`Project History ${plan.slug} validation data is required`);
+    }
+    for (const item of plan.items) {
+      if (!Array.isArray(item.validationAssertions)) {
+        throw new TypeError(`Project History ${plan.slug} ${item.id} validationAssertions must be an array`);
+      }
+      for (const assertion of item.validationAssertions) {
+        if (!nonEmptyString(assertion.id) || !assertion.id.startsWith('VAL-') || assertion.planItemId !== item.id) {
+          throw new TypeError(`Project History ${plan.slug} ${item.id} has an invalid validation assertion`);
+        }
+      }
+    }
     for (const item of plan.completedItems) {
       if (!nonEmptyString(item.id) || !Array.isArray(item.commits)) {
         throw new TypeError(`Project History ${plan.slug} has an invalid completed item`);
