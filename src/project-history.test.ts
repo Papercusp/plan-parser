@@ -258,6 +258,37 @@ describe('Project History v2', () => {
     expect(() => assertProjectHistoryDocument(invalid)).toThrow(/invalid commit sha/);
   });
 
+  it('rejects incomplete validation provenance, stale rollups, timestamps, and commit linkage', () => {
+    const valid = assembleProjectHistory({
+      project,
+      source,
+      plans: [{ markdown: MARKDOWN }],
+      commits: [{
+        sha: 'abc1234def5678',
+        committedAt: '2026-08-14T20:30:00.000Z',
+        files: ['src/history.ts'],
+        remoteStatus: 'confirmed',
+        links: [{ workItemId: 'WI-100', attribution: 'authoritative' }],
+      }],
+    });
+
+    const missingEvidence = structuredClone(valid);
+    missingEvidence.plans[0]!.items[0]!.validationAssertions[0]!.evidenceLocator = '';
+    expect(() => assertProjectHistoryDocument(missingEvidence)).toThrow(/invalid validation assertion/);
+
+    const staleSummary = structuredClone(valid);
+    staleSummary.plans[0]!.validationSummary.passed = 0;
+    expect(() => assertProjectHistoryDocument(staleSummary)).toThrow(/validationSummary/);
+
+    const invalidTimestamp = structuredClone(valid);
+    invalidTimestamp.plans[0]!.completedItems[0]!.completedAt = 'not-a-timestamp';
+    expect(() => assertProjectHistoryDocument(invalidTimestamp)).toThrow(/completedAt/);
+
+    const invalidCommit = structuredClone(valid);
+    invalidCommit.plans[0]!.completedItems[0]!.commits[0]!.remoteStatus = 'confirmed-locally' as never;
+    expect(() => assertProjectHistoryDocument(invalidCommit)).toThrow(/invalid commit sha/);
+  });
+
   it('parses canonical inline validation blocks and coerces unknown statuses to todo', () => {
     const assertions = validationAssertionsFromPlan(MARKDOWN.replace('`passed`', '`dropped`'));
     expect(assertions).toHaveLength(2);

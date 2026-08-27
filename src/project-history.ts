@@ -489,6 +489,32 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function validTimestamp(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+}
+
+function nonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+const VALIDATION_STATUSES = new Set<ProjectHistoryValidationStatus>(['todo', 'validating', 'passed', 'failed']);
+const COMMIT_ATTRIBUTIONS = new Set<ProjectHistoryCommitAttribution>(['authoritative', 'body-reference', 'inferred']);
+const COMMIT_REMOTE_STATUSES = new Set<ProjectHistoryCommitRemoteStatus>(['confirmed', 'local-only', 'unknown']);
+
+function validValidationSummary(value: unknown, assertions: readonly ProjectHistoryValidationAssertion[]): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const summary = value as Partial<ProjectHistoryValidationSummary>;
+  const expected = validationSummary(assertions);
+  return (
+    summary.total === expected.total
+    && summary.passed === expected.passed
+    && summary.failed === expected.failed
+    && summary.validating === expected.validating
+    && summary.todo === expected.todo
+    && summary.requiringTest === expected.requiringTest
+  );
+}
+
 /** Runtime guard for generated or remotely loaded History documents. */
 export function assertProjectHistoryDocument(value: unknown): ProjectHistoryDocument {
   if (!value || typeof value !== 'object') throw new TypeError('Project History document must be an object');
@@ -502,6 +528,12 @@ export function assertProjectHistoryDocument(value: unknown): ProjectHistoryDocu
   if (!document.source || !nonEmptyString(document.source.workspace) || !nonEmptyString(document.source.harness)) {
     throw new TypeError('Project History source.workspace and source.harness are required');
   }
+  if (document.source.kind !== 'papercusp-plan-export' || !nonEmptyString(document.source.generator)) {
+    throw new TypeError('Project History source.kind and source.generator are required');
+  }
+  if (typeof document.source.generatedAt !== 'string' || !validTimestamp(document.source.generatedAt)) {
+    throw new TypeError('Project History source.generatedAt must be a valid timestamp');
+  }
   if (!Array.isArray(document.plans)) throw new TypeError('Project History plans must be an array');
   if (document.source.planCount !== document.plans.length) {
     throw new TypeError('Project History source.planCount must equal plans.length');
@@ -512,26 +544,60 @@ export function assertProjectHistoryDocument(value: unknown): ProjectHistoryDocu
       throw new TypeError(`Project History plan slugs must be non-empty and unique: ${String(plan.slug)}`);
     }
     slugs.add(plan.slug);
+    if (!validTimestamp(plan.updatedAt)) {
+      throw new TypeError(`Project History ${plan.slug} updatedAt must be a valid timestamp`);
+    }
     if (!Array.isArray(plan.completedItems)) throw new TypeError(`Project History ${plan.slug} completedItems must be an array`);
     if (!Array.isArray(plan.items) || !plan.validationSummary) {
       throw new TypeError(`Project History ${plan.slug} validation data is required`);
     }
+    const assertionIds = new Set<string>();
+    const assertions: ProjectHistoryValidationAssertion[] = [];
     for (const item of plan.items) {
       if (!Array.isArray(item.validationAssertions)) {
         throw new TypeError(`Project History ${plan.slug} ${item.id} validationAssertions must be an array`);
       }
       for (const assertion of item.validationAssertions) {
-        if (!nonEmptyString(assertion.id) || !assertion.id.startsWith('VAL-') || assertion.planItemId !== item.id) {
+        if (
+          !nonEmptyString(item.id)
+          || !nonEmptyString(assertion.id)
+          || assertionIds.has(assertion.id)
+          || !assertion.id.startsWith('VAL-')
+          || assertion.planItemId !== item.id
+          || !nonEmptyString(assertion.verify)
+          || !nonEmptyString(assertion.evidenceLocator)
+          || !VALIDATION_STATUSES.has(assertion.status)
+          || typeof assertion.requiresTest !== 'boolean'
+          || assertion.source !== 'canonical-plan-inline'
+          || !nonNegativeInteger(assertion.sourceLineNumber)
+          || assertion.sourceLineNumber < 1
+        ) {
           throw new TypeError(`Project History ${plan.slug} ${item.id} has an invalid validation assertion`);
         }
+        assertionIds.add(assertion.id);
+        assertions.push(assertion);
       }
+    }
+    if (!validValidationSummary(plan.validationSummary, assertions)) {
+      throw new TypeError(`Project History ${plan.slug} validationSummary does not match validation assertions`);
     }
     for (const item of plan.completedItems) {
       if (!nonEmptyString(item.id) || !Array.isArray(item.commits)) {
         throw new TypeError(`Project History ${plan.slug} has an invalid completed item`);
       }
+      if (!validTimestamp(item.completedAt)) {
+        throw new TypeError(`Project History ${item.id} completedAt must be a valid timestamp`);
+      }
       for (const commit of item.commits) {
-        if (!/^[0-9a-f]{7,64}$/i.test(commit.sha)) {
+        if (
+          !/^[0-9a-f]{7,64}$/i.test(commit.sha)
+          || !validTimestamp(commit.committedAt)
+          || !Array.isArray(commit.files)
+          || commit.files.some((file) => !nonEmptyString(file))
+          || !COMMIT_REMOTE_STATUSES.has(commit.remoteStatus)
+          || !COMMIT_ATTRIBUTIONS.has(commit.attribution)
+          || (commit.url !== null && !nonEmptyString(commit.url))
+        ) {
           throw new TypeError(`Project History ${item.id} has an invalid commit sha: ${commit.sha}`);
         }
       }
