@@ -17,6 +17,7 @@
 export * from "./parser";
 export * from "./risk-model";
 export * from "./effective-status";
+export * from "./next-pointer";
 export * from "./renderer";
 export * from "./parts";
 export * from "./spec-triad";
