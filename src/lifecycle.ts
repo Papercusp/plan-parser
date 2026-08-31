@@ -45,7 +45,7 @@
  * inputs always produce the same verdict and a test needs no fake timers.
  */
 
-import { isTerminalPlanStatus, type ItemStatus, type PlanItem } from './parser';
+import { PLAN_STATUSES, type ItemStatus, type PlanItem, type PlanStatus } from './parser';
 import { resolveEffectiveStatusForItems, type ResolvedItem } from './effective-status';
 
 /**
@@ -341,7 +341,7 @@ export interface PlanLifecycleReconciliation {
  *
  * # Jurisdiction (narrow on purpose — the sibling of D-003)
  *
- * The graph contradicts the label in exactly TWO cases, both of which are
+ * The graph contradicts the label in exactly THREE cases, all of which are
  * statements about ITEMS, which is the only thing the graph can see:
  *
  *   1. **A live status over a drained graph** — `draft`/`ready`/`active` while
@@ -350,6 +350,11 @@ export interface PlanLifecycleReconciliation {
  *   2. **`shipped` over a live graph** — the ship gate refuses a plan with a
  *      `todo`/`blocked`/`needs-human` item, so a shipped plan with live items
  *      means the graph moved after the ship (or the gate was forced past).
+ *   3. **`awaiting-acceptance` over a live graph** — the mirror of (2) one
+ *      state earlier: that status asserts implementation is complete, so a
+ *      live item refutes it. P-004's reverse transition repairs this
+ *      automatically when the flip goes through `plans:set-status`; the case
+ *      is reported anyway, because any other edit path can still produce it.
  *
  * Everything else is left alone. In particular `superseded` is NEVER
  * contradicted: a superseded plan is deliberately abandoned mid-flight, so live
@@ -366,6 +371,89 @@ export interface PlanLifecycleReconciliation {
  * Pure. Never mutates, never writes, and — like every derivation in this
  * module — reports rather than repairs.
  */
+/**
+ * A status change the graph WARRANTS, as opposed to one it merely reports.
+ *
+ * `reason` is written to be read by whoever finds the transition in a log or a
+ * plan history months later, so it states the evidence, not the rule name.
+ */
+export interface PlanStatusTransition {
+  from: PlanStatus;
+  to: Extract<PlanStatus, 'awaiting-acceptance' | 'ready'>;
+  reason: string;
+}
+
+/**
+ * Decide whether the item graph warrants MOVING a plan's stored status (P-004).
+ *
+ * # Why this is narrower than {@link reconcilePlanLifecycle}
+ *
+ * Reconciliation REPORTS on any divergence; this function only proposes a write,
+ * so it must clear a much higher bar: the target has to be recoverable from the
+ * graph alone, or the write destroys information no derivation can put back.
+ * Exactly one bit qualifies — *is any item non-terminal* — which is why the
+ * transition is total and invertible in both directions, and why the eligible
+ * statuses are exactly the two that differ by that bit and nothing else.
+ *
+ * # What it deliberately never does
+ *
+ *   · **Never touches `draft`.** `draft` vs `ready` encodes an authorial
+ *     decision (has this plan been greenlit?) that the graph cannot see, so a
+ *     rule moving a drained draft to `awaiting-acceptance` would silently
+ *     greenlight a plan nobody approved — and could not undo it, because
+ *     un-draining restores `ready`, not the `draft` it took.
+ *   · **Never writes `shipped` or `superseded`, and never moves off them.**
+ *     Shipping requires a code-truth audit, a vetted rubric and independent
+ *     grading; deriving it from item statuses would forge exactly the evidence
+ *     the ship gate exists to demand. Moving OFF a terminal status would
+ *     resurrect a closed plan.
+ *   · **Never writes `active`.** It is the legacy synonym for `ready`, accepted
+ *     as a SOURCE (existing rows still carry it) and never as a target.
+ *   · **Abstains on an itemless plan.** `no-items` is not `drained`; reading it
+ *     as one would declare every itemless plan implementation-complete.
+ *
+ * Returns `null` when no write is warranted — which is the overwhelmingly
+ * common case, including every re-flip that does not cross the boundary.
+ */
+export function derivePlanStatusTransition(
+  storedStatus: string | null | undefined,
+  derived: DerivedPlanLifecycle,
+): PlanStatusTransition | null {
+  // An itemless plan's graph is silent (D-004 point 4). Guarding on the verdict
+  // rather than on `counts.total` keeps the two in lockstep: whatever
+  // derivePlanLifecycle treats as "no verdict" is what abstains here.
+  if (derived.verdict === 'no-items') return null;
+
+  const stored = (storedStatus ?? '').trim() || null;
+  const drained = derived.counts.nonTerminal === 0;
+  const census = `${derived.counts.done} done, ${derived.counts.dropped} dropped`;
+
+  if (drained && (stored === 'ready' || stored === 'active')) {
+    return {
+      from: stored,
+      to: 'awaiting-acceptance',
+      reason:
+        `every one of ${derived.counts.total} items is terminal (${census}), so there is no ` +
+        'implementation left to pick up. This records that the plan is waiting on the ' +
+        'acceptance gate — it is NOT a claim that the plan passed one.',
+    };
+  }
+
+  if (!drained && stored === 'awaiting-acceptance') {
+    return {
+      from: stored,
+      to: 'ready',
+      reason:
+        `${derived.counts.nonTerminal} of ${derived.counts.total} items are live again ` +
+        `(${derived.liveItems.map((it) => it.id).join(', ')}` +
+        `${derived.liveItemsTruncated ? ', …' : ''}), so the plan is waiting on the work, ` +
+        'not on a grader.',
+    };
+  }
+
+  return null;
+}
+
 export function reconcilePlanLifecycle(
   storedStatus: string | null | undefined,
   derived: DerivedPlanLifecycle,
@@ -375,11 +463,11 @@ export function reconcilePlanLifecycle(
 
   if (derived.verdict === 'no-items') return { ...base, disposition: 'abstained' };
 
-  const known =
-    stored === 'draft' ||
-    stored === 'ready' ||
-    stored === 'active' ||
-    isTerminalPlanStatus(stored);
+  // Derived from the vocabulary rather than re-listed: a status added to
+  // PLAN_STATUSES and forgotten here would report `unrecognized` on every plan
+  // holding it, which reads as "this label is not one we know" — a much more
+  // alarming statement than the truth ("nobody updated this list").
+  const known = stored !== null && (PLAN_STATUSES as readonly string[]).includes(stored);
   if (!known) return { ...base, disposition: 'unrecognized' };
 
   const drained = derived.counts.nonTerminal === 0;
@@ -395,6 +483,27 @@ export function reconcilePlanLifecycle(
           `(${derived.liveItems.map((it) => `${it.id} [${it.effectiveStatus}]`).join(', ')}` +
           `${derived.liveItemsTruncated ? ', …' : ''}). The ship gate refuses live items, so ` +
           'either the graph moved after the ship or the gate was forced past.',
+      },
+    };
+  }
+
+  // The mirror of the `shipped` case, and the one P-004's reverse transition
+  // repairs: `awaiting-acceptance` asserts that implementation is COMPLETE and
+  // only grading remains, so a live item refutes it directly. Reported rather
+  // than assumed impossible — the rule that maintains this status fires off a
+  // `plans:set-status` call, and a plan whose items were edited by any other
+  // path (a raw `.md` edit, a restore) can reach this state unrepaired.
+  if (stored === 'awaiting-acceptance' && !drained) {
+    return {
+      ...base,
+      disposition: 'contradicted',
+      contradiction: {
+        claim: 'status: awaiting-acceptance — implementation is done and only grading remains',
+        evidence:
+          `${derived.counts.nonTerminal} of ${derived.counts.total} items are still live ` +
+          `(${derived.liveItems.map((it) => `${it.id} [${it.effectiveStatus}]`).join(', ')}` +
+          `${derived.liveItemsTruncated ? ', …' : ''}). Implementation is NOT complete, so ` +
+          'this plan is not waiting on a grader — it is waiting on the work.',
       },
     };
   }

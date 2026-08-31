@@ -27,8 +27,43 @@ import {
   DEFAULT_AUTHORITY,
 } from './risk-model';
 
-export const PLAN_STATUSES = ['draft', 'ready', 'active', 'shipped', 'superseded'] as const;
+/**
+ * The plan-lifecycle vocabulary.
+ *
+ * `awaiting-acceptance` (P-004) is the state between "implementation landed"
+ * and "shipped": every item is terminal, but the code-truth audit and the
+ * independent acceptance grading have not been done. Before it existed a
+ * drained plan had nowhere truthful to sit and stayed at `ready`/`active`,
+ * which is why 227 live plans read as live work with nothing left to do.
+ *
+ * It is written by a rule off the author's own last terminal item flip, and
+ * NEVER advanced to `shipped` by anything automatic — the ship gate's audit
+ * and independent grading cannot be derived from item statuses, and inventing
+ * them is precisely the evidence-forgery this vocabulary exists to prevent.
+ *
+ * `active` is LEGACY and survives only on existing rows: `set-plan-status.ts`
+ * omits it from `SETTABLE` and maps it to `ready`. It is still accepted as a
+ * SOURCE of the drained transition, and never written.
+ */
+export const PLAN_STATUSES = [
+  'draft',
+  'ready',
+  'active',
+  'awaiting-acceptance',
+  'shipped',
+  'superseded',
+] as const;
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
+
+/**
+ * True when the plan's implementation is complete but acceptance has not been
+ * concluded. Deliberately NOT folded into {@link isTerminalPlanStatus}: a plan
+ * awaiting grading is not finished, and treating it as terminal would let it
+ * skip the very gate the status exists to route it into.
+ */
+export function isAwaitingAcceptanceStatus(status: string | null | undefined): boolean {
+  return status === 'awaiting-acceptance';
+}
 
 /**
  * Terminal plan-lifecycle statuses — the plan is finished, not in flight.
@@ -45,6 +80,23 @@ export const TERMINAL_PLAN_STATUSES = ['shipped', 'superseded'] as const;
 export function isTerminalPlanStatus(status: string | null | undefined): boolean {
   return status === 'shipped' || status === 'superseded';
 }
+
+/**
+ * Statuses a plan can hold while it is still in flight — i.e. not terminal.
+ *
+ * DERIVED from {@link PLAN_STATUSES} minus {@link TERMINAL_PLAN_STATUSES}
+ * rather than re-listed, so a new status cannot be silently omitted from one
+ * of the two halves. Hand-typed duplicates of this vocabulary are exactly how
+ * it drifted before: `set-frontmatter.ts` carried its own copy of the five
+ * values and had to be found by grep.
+ *
+ * Declared AFTER {@link TERMINAL_PLAN_STATUSES} on purpose — it reads that
+ * binding at module-evaluation time, so hoisting it above would throw a
+ * temporal-dead-zone `ReferenceError` on import.
+ */
+export const NON_TERMINAL_PLAN_STATUSES: readonly PlanStatus[] = PLAN_STATUSES.filter(
+  (s) => !(TERMINAL_PLAN_STATUSES as readonly string[]).includes(s),
+);
 
 export const ITEM_STATUSES = [
   'todo',
