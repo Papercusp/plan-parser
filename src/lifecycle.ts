@@ -356,6 +356,18 @@ export interface PlanLifecycleReconciliation {
   disposition: PlanLifecycleDisposition;
   /** Set only on `contradicted`: the claim, and the evidence against it. */
   contradiction: { claim: string; evidence: string } | null;
+  /**
+   * One line, ready to render — the STATUS-AWARE counterpart of
+   * `derived.text`. Identical to it except over a TERMINAL stored status
+   * (`shipped` / `superseded`), where the graph-only sentence is wrong: the
+   * acceptance rubric RETIRES on ship, so `rubricActive:false` on a shipped
+   * plan means "completed and retired", and rendering the graph's "the
+   * validation path has not begun" there told readers a finished plan was
+   * unvalidated (measured on a plan shipped with two independent graders).
+   * `derived.text` is left untouched on purpose — it is the graph's own
+   * verdict and must stay pure; this is the line a UI should print.
+   */
+  text: string;
   /** The graph's own verdict, attached on EVERY disposition — a reader can
    *  always see what was checked rather than trusting that it was. */
   derived: DerivedPlanLifecycle;
@@ -484,7 +496,7 @@ export function reconcilePlanLifecycle(
   derived: DerivedPlanLifecycle,
 ): PlanLifecycleReconciliation {
   const stored = (storedStatus ?? '').trim() || null;
-  const base = { storedStatus: stored, derived, contradiction: null };
+  const base = { storedStatus: stored, derived, contradiction: null, text: derived.text };
 
   if (derived.verdict === 'no-items') return { ...base, disposition: 'abstained' };
 

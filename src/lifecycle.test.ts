@@ -102,6 +102,34 @@ describe('derivePlanLifecycle — the acceptance axis', () => {
     expect(d.verdict).toBe('implementation-complete');
   });
 
+  // EI-22078741539479611: an acceptance rubric retires WITH its shipped plan, so
+  // `rubricActive:false` beside a retired ref is a validation that CLOSED. The old
+  // text ("the validation path has not begun") sent agents to author a duplicate.
+  it('a RETIRED rubric reads as validation CLOSED, not "not begun"', () => {
+    const d = derivePlanLifecycle(drained, {
+      acceptance: { rubricActive: false, retiredRubricRef: 'acc/plan-x' },
+    });
+    expect(d.verdict).toBe('implementation-complete');
+    expect(d.text).toContain('acc/plan-x');
+    expect(d.text).toMatch(/completed and closed/i);
+    expect(d.text).not.toMatch(/has not begun/i);
+    expect(d.unmeasured).not.toContain('acceptance');
+  });
+
+  it('CONTROL: the same signal WITHOUT a retired ref keeps the "not begun" reading', () => {
+    const d = derivePlanLifecycle(drained, { acceptance: { rubricActive: false, retiredRubricRef: null } });
+    expect(d.verdict).toBe('implementation-complete');
+    expect(d.text).toMatch(/has not begun/i);
+  });
+
+  it('an ACTIVE rubric outranks a retired one — a successor contract means grading is pending again', () => {
+    const d = derivePlanLifecycle(drained, {
+      acceptance: { rubricActive: true, rubricRef: 'acc/plan-x-r2', retiredRubricRef: 'acc/plan-x' },
+    });
+    expect(d.verdict).toBe('awaiting-acceptance');
+    expect(d.text).toContain('acc/plan-x-r2');
+  });
+
   it('never claims a plan is ACCEPTED — an active rubric is not a passing grade', () => {
     const d = derivePlanLifecycle(drained, { acceptance: { rubricActive: true } });
     expect(d.text).toMatch(/not a claim that it will pass/i);
