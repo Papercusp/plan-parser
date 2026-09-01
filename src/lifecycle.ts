@@ -83,6 +83,16 @@ export interface PlanAcceptanceSignal {
   rubricActive: boolean;
   /** Which rubric, when one was found. */
   rubricRef?: string | null;
+  /**
+   * The acceptance rubric this plan WAS validated against, when none is active.
+   *
+   * An acceptance rubric retires WITH its shipped plan (one-shot, by design), so
+   * on a shipped plan `rubricActive:false` means the validation path was walked
+   * and CLOSED — not never begun. A reader that cannot tell those apart sends
+   * agents to author a duplicate rubric for a finished plan
+   * (EI-22078741539479611). Omit when the retired rubric was not looked up.
+   */
+  retiredRubricRef?: string | null;
 }
 
 /**
@@ -269,6 +279,21 @@ export function derivePlanLifecycle(
           `every item is terminal (${terminalCensus}) and an acceptance rubric is active` +
           `${acceptance.rubricRef ? ` (${acceptance.rubricRef})` : ''} — the remaining work is ` +
           'independent grading, not implementation. This is not a claim that it will pass.',
+      };
+    }
+    // A retired acceptance rubric is the trace of a validation that CLOSED (it
+    // retires with the ship), which is the opposite of "has not begun". The verdict
+    // stays implementation-complete — the graph still cannot prove the grade
+    // passed — but the text must not send a reader to start a path already walked.
+    if (acceptance && !acceptance.rubricActive && acceptance.retiredRubricRef) {
+      return {
+        ...base,
+        verdict: 'implementation-complete',
+        text:
+          `every item is terminal (${terminalCensus}); no acceptance rubric is active because ` +
+          `'${acceptance.retiredRubricRef}' was RETIRED — an acceptance rubric retires with its ` +
+          'shipped plan, so read this as validation completed and closed, never as validation ' +
+          'not begun. Nothing here is pending; do not author a replacement rubric.',
       };
     }
     return {
