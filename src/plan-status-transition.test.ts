@@ -19,6 +19,14 @@ import { PLAN_STATUSES, NON_TERMINAL_PLAN_STATUSES, type ItemStatus, type PlanIt
  * silently inheriting whichever branch it happens to fall into.
  */
 
+// Named guard instead of a self-referential `t is Exclude<typeof t, undefined>`
+// predicate: TS cannot verify a predicate whose asserted type derives from the
+// parameter's own `typeof` reference, so that form fails to typecheck under
+// stricter narrowing (TS2677). A generic guard sidesteps the self-reference.
+function isDefined<T>(v: T | undefined): v is T {
+  return v !== undefined;
+}
+
 const item = (id: string, storedStatus: ItemStatus): PlanItem => ({
   id,
   text: `${id} body text`,
@@ -115,7 +123,7 @@ describe('derivePlanStatusTransition — what it must never touch', () => {
     const everyProposal = PLAN_STATUSES.flatMap((s) => [
       derivePlanStatusTransition(s, drained())?.to,
       derivePlanStatusTransition(s, live())?.to,
-    ]).filter((t): t is Exclude<typeof t, undefined> => t !== undefined);
+    ]).filter(isDefined);
     expect(everyProposal.length).toBeGreaterThan(0);
     expect(everyProposal).not.toContain('shipped');
     expect(everyProposal).not.toContain('superseded');
