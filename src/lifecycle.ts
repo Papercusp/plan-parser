@@ -545,6 +545,36 @@ export function reconcilePlanLifecycle(
     };
   }
 
+  // Terminal stored statuses that the graph AGREES with get a status-aware
+  // line. The graph-only sentence for a drained plan ("no acceptance rubric is
+  // active — the validation path has not begun") is correct while the plan is
+  // live and false once it has shipped: the acceptance rubric retires ON ship,
+  // so its absence is the expected end state, not a gap. `derived` is left
+  // exactly as the graph produced it — only the render line changes.
+  if (stored === 'shipped' && drained) {
+    return {
+      ...base,
+      disposition: 'agreed',
+      text:
+        `every item is terminal (${derived.counts.done} done, ${derived.counts.dropped} dropped) ` +
+        'and the plan is shipped — a terminal status the ship gate writes after independent ' +
+        'acceptance grading and the author\'s verdict. The acceptance rubric retires on ship, so ' +
+        'an inactive rubric here means completed-and-retired, not never-begun. Nothing is left to do.',
+    };
+  }
+
+  if (stored === 'superseded') {
+    return {
+      ...base,
+      disposition: 'agreed',
+      text:
+        `superseded — the plan was deliberately abandoned (${derived.counts.done} done, ` +
+        `${derived.counts.dropped} dropped, ${derived.counts.nonTerminal} still live` +
+        (drained ? '' : ', which is the normal shape of a plan that stopped mid-flight') +
+        '). No acceptance path is expected; a successor plan carries whatever survived.',
+    };
+  }
+
   if ((stored === 'draft' || stored === 'ready' || stored === 'active') && drained) {
     return {
       ...base,

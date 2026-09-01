@@ -115,7 +115,7 @@ describe('derivePlanStatusTransition — what it must never touch', () => {
     const everyProposal = PLAN_STATUSES.flatMap((s) => [
       derivePlanStatusTransition(s, drained())?.to,
       derivePlanStatusTransition(s, live())?.to,
-    ]).filter((t): t is string => typeof t === 'string');
+    ]).filter((t): t is Exclude<typeof t, undefined> => t !== undefined);
     expect(everyProposal.length).toBeGreaterThan(0);
     expect(everyProposal).not.toContain('shipped');
     expect(everyProposal).not.toContain('superseded');

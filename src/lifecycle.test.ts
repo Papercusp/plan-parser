@@ -238,6 +238,45 @@ describe('reconcilePlanLifecycle — jurisdiction', () => {
     expect(reconcilePlanLifecycle('shipped', drained).disposition).toBe('agreed');
   });
 
+  it('shipped over a drained graph renders a TERMINAL line, never "the validation path has not begun"', () => {
+    // The acceptance rubric RETIRES on ship, so rubricActive:false on a shipped
+    // plan means completed-and-retired. Rendering the graph-only sentence there
+    // told readers a plan shipped with two independent graders was unvalidated
+    // (measured 2026-09-01 on autonomous-inbox-resolution-2026-08-31).
+    const r = reconcilePlanLifecycle('shipped', drained);
+    expect(r.disposition).toBe('agreed');
+    expect(r.text).not.toMatch(/has not begun/i);
+    expect(r.text).toMatch(/shipped/);
+    expect(r.text).toMatch(/retires on ship/i);
+    expect(r.text).toMatch(/2 done, 0 dropped/);
+    // The graph's own verdict is untouched — `derived` stays pure.
+    expect(r.derived.text).toMatch(/has not begun/i);
+    expect(r.derived.verdict).toBe('implementation-complete');
+  });
+
+  it('superseded renders an abandonment line on BOTH live and drained graphs', () => {
+    const liveR = reconcilePlanLifecycle('superseded', liveGraph);
+    expect(liveR.text).toMatch(/^superseded/);
+    expect(liveR.text).toMatch(/1 still live/);
+    expect(liveR.text).toMatch(/stopped mid-flight/);
+    expect(liveR.text).not.toMatch(/has not begun/i);
+    const drainedR = reconcilePlanLifecycle('superseded', drained);
+    expect(drainedR.text).toMatch(/^superseded/);
+    expect(drainedR.text).not.toMatch(/stopped mid-flight/);
+    expect(drainedR.text).not.toMatch(/has not begun/i);
+  });
+
+  it('CONTROL: every NON-terminal status passes the graph line through verbatim', () => {
+    // The terminal override must not leak: a live plan's line stays the graph's.
+    expect(reconcilePlanLifecycle('active', liveGraph).text).toBe(liveGraph.text);
+    expect(reconcilePlanLifecycle('draft', drained).text).toBe(drained.text);
+    expect(reconcilePlanLifecycle('awaiting-acceptance', drained).text).toBe(drained.text);
+    expect(reconcilePlanLifecycle('in-review', drained).text).toBe(drained.text);
+    // …and a CONTRADICTED shipped plan keeps the graph line too, because the
+    // live items ARE the story there.
+    expect(reconcilePlanLifecycle('shipped', liveGraph).text).toBe(liveGraph.text);
+  });
+
   it('NEVER contradicts superseded, whose whole meaning is abandonment mid-flight', () => {
     // The paired case above proves the live-graph branch fires for `shipped`,
     // so this passing is a real exemption rather than a dead branch.
