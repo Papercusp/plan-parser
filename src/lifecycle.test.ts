@@ -84,6 +84,59 @@ describe('derivePlanLifecycle — the implementation axis', () => {
     expect(d.counts.nonTerminal).toBe(2);
     expect(d.counts.blocked).toBe(1);
   });
+
+  it('counts an item blocked WITHOUT blocked-by edges — the Decision-blocked case', () => {
+    // The case above is dependency-derived, so `unresolvedBlockers` is
+    // populated and counting edges happens to get it right. This one is the
+    // half that edge-counting cannot see: a stored `blocked` token kept for a
+    // deliberate external reason (re-blocked by a plan Decision) resolves to
+    // `effectiveStatus: 'blocked'` with `unresolvedBlockers: []`. Counting
+    // edges reported it as 0 blocked — a well-formed number that told a reader
+    // the lane was drained while the ship gate refused on that same item.
+    const d = derivePlanLifecycle([item('P-001', 'done'), item('P-002', 'blocked')], {
+      freshness: fresh(0),
+    });
+    expect(d.counts.blocked).toBe(1);
+    expect(d.counts.nonTerminal).toBe(1);
+    expect(d.text).toMatch(/1 blocked/);
+  });
+
+  it('CONTROL: the same graph with P-002 todo instead of blocked counts 0 blocked', () => {
+    // One field differs — P-002's storedStatus — and the count moves with it.
+    // Without this half, a mutant counting every live item as blocked would
+    // satisfy the assertion above and still be wrong in the other direction.
+    const d = derivePlanLifecycle([item('P-001', 'done'), item('P-002', 'todo')], {
+      freshness: fresh(0),
+    });
+    expect(d.counts.blocked).toBe(0);
+    expect(d.counts.nonTerminal).toBe(1);
+    expect(d.text).toMatch(/0 blocked/);
+  });
+
+  it('no live blocked item goes uncounted, so the breakdown accounts for every live item', () => {
+    // The shape measured live on plan silent-wrong-answers-2026-08-01 (v94):
+    // 19 done, 1 wip, 3 Decision-blocked, 1 needs-human. It reported
+    // "5 of 24 items are still live (1 wip, 0 blocked, 1 needs-human)" — three
+    // items present in `nonTerminal` and absent from every named bucket, so the
+    // sub-counts summed to 2 of 5.
+    const items = [
+      item('P-001', 'done'),
+      item('P-016', 'wip'),
+      item('P-009', 'blocked'),
+      item('P-018', 'blocked'),
+      item('P-020', 'blocked'),
+      item('P-012', 'needs-human'),
+    ];
+    const d = derivePlanLifecycle(items, { freshness: fresh(0) });
+
+    expect(d.counts.blocked).toBe(3);
+    expect(d.counts.nonTerminal).toBe(5);
+    // Every live item here falls in exactly one named band, so the breakdown
+    // must account for all of them. (This sum is asserted for THIS fixture, not
+    // as a general law: a plain `todo` item is live and belongs to no band.)
+    expect(d.counts.wip + d.counts.blocked + d.counts.needsHuman).toBe(d.counts.nonTerminal);
+    expect(d.text).not.toMatch(/0 blocked/);
+  });
 });
 
 describe('derivePlanLifecycle — the acceptance axis', () => {

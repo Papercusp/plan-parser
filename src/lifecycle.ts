@@ -179,6 +179,27 @@ function awaitsHuman(item: ResolvedItem): boolean {
 }
 
 /**
+ * Same two-signal rule as `awaitsHuman`, and for a sharper reason: the resolver
+ * GUARANTEES the two signals diverge.
+ *
+ * An item blocked by a dependency edge carries `unresolvedBlockers`. An item
+ * blocked for a deliberate external reason — re-blocked by a plan Decision,
+ * say — carries `effectiveStatus: 'blocked'` with `unresolvedBlockers: []`,
+ * because `resolveEffectiveStatusForItems` keeps the stored token sticky and
+ * never invents edges for it. `effective-status.ts` documents that case as
+ * legitimate and expected, and names the harm of reading it by edges alone:
+ * "a caller reads that as 'the lane is drained'".
+ *
+ * Counting only the edge-derived half made this module that caller. It reported
+ * `blocked: 0` for a plan holding three Decision-blocked items, so the summary
+ * line "N wip, 0 blocked, M needs-human" told a reader nothing stood in the
+ * way while the ship gate — which refuses on blocked items — disagreed.
+ */
+function isBlocked(item: ResolvedItem): boolean {
+  return item.effectiveStatus === 'blocked' || item.unresolvedBlockers.length > 0;
+}
+
+/**
  * Whole days between two instants, or `null` if either is unparseable.
  *
  * An unparseable timestamp returns `null` rather than `0`: zero reads as "just
@@ -259,7 +280,7 @@ export function derivePlanLifecycle(
       counts.nonTerminal += 1;
       if (item.effectiveStatus === 'wip') counts.wip += 1;
       if (awaitsHuman(item)) counts.needsHuman += 1;
-      else if (item.unresolvedBlockers.length > 0) counts.blocked += 1;
+      else if (isBlocked(item)) counts.blocked += 1;
       live.push(item);
     }
   }
