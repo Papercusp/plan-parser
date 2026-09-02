@@ -4,6 +4,7 @@ import {
   derivePlanLifecycle,
   reconcilePlanLifecycle,
 } from './lifecycle';
+import { resolveEffectiveStatusForItems } from './effective-status';
 import type { ItemStatus, PlanItem } from './parser';
 
 /**
@@ -93,9 +94,17 @@ describe('derivePlanLifecycle — the implementation axis', () => {
     // `effectiveStatus: 'blocked'` with `unresolvedBlockers: []`. Counting
     // edges reported it as 0 blocked — a well-formed number that told a reader
     // the lane was drained while the ship gate refused on that same item.
-    const d = derivePlanLifecycle([item('P-001', 'done'), item('P-002', 'blocked')], {
-      freshness: fresh(0),
-    });
+    const fixture = [item('P-001', 'done'), item('P-002', 'blocked')];
+
+    // Pin that this fixture really exercises the EDGE-FREE path, so the test
+    // cannot pass for the wrong reason: if P-002 ever resolved with blocker
+    // edges, the old edge-counting predicate would have counted it too and
+    // this case would silently stop covering the regression it exists for.
+    const resolved = resolveEffectiveStatusForItems(fixture).items.find((i) => i.id === 'P-002')!;
+    expect(resolved.effectiveStatus).toBe('blocked');
+    expect(resolved.unresolvedBlockers).toEqual([]);
+
+    const d = derivePlanLifecycle(fixture, { freshness: fresh(0) });
     expect(d.counts.blocked).toBe(1);
     expect(d.counts.nonTerminal).toBe(1);
     expect(d.text).toMatch(/1 blocked/);
