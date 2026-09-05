@@ -492,6 +492,80 @@ function isItemContinuation(line: string): boolean {
   return true;
 }
 
+/**
+ * Surface hard-wrapped text that was split between two lowercase letters.
+ *
+ * This is deliberately a NOTICE rather than a warning: the parser can still
+ * recover a useful plan from the bytes, and routing the signal through
+ * `parseWarnings` would make every subsequent structured write fail. Fenced
+ * examples are masked first so a worked example containing a wrapped sentence
+ * does not make the surrounding plan look malformed.
+ */
+function addMidWordLineBreakNotice(body: string, notices: string[]): void {
+  const masked = maskFences(body);
+  const lines = new Set<number>();
+  for (const match of masked.matchAll(/[a-z]\n[a-z]/g)) {
+    const index = match.index ?? -1;
+    if (index < 0) continue;
+    lines.add(masked.slice(0, index).split('\n').length);
+  }
+  if (lines.size === 0) return;
+
+  const sorted = [...lines].sort((a, b) => a - b);
+  const shown = sorted.slice(0, 8).join(', ');
+  const suffix = sorted.length > 8 ? `, … +${sorted.length - 8} more` : '';
+  notices.push(
+    `Mid-word hard line break(s) at body line(s) ${shown}${suffix}: a lowercase letter is ` +
+      `immediately followed by a newline and lowercase letter. Wrapped prose or item text may ` +
+      `have been split before it reached the plan parser.`,
+  );
+}
+
+/**
+ * A structured item marker that survived on a non-item line is almost always
+ * a wrapper-detached suffix. In the observed failure, the first physical line
+ * parsed as an item and the next unindented line carried `blocked-by: P-006`;
+ * the dependency therefore disappeared from the graph while lint remained
+ * clean. Keep this check scoped to Phase sections, where these markers have
+ * structured meaning and ordinary prose is not expected to mention them.
+ */
+function addOrphanItemMarkerWarnings(
+  sections: RawSection[],
+  parsedItemLines: ReadonlySet<number>,
+  warnings: string[],
+): void {
+  for (const section of sections) {
+    if (section.level !== 2 || !/^Phase\b/i.test(section.normalizedHeading)) continue;
+
+    let inFence = false;
+    for (let i = 0; i < section.body.length; i++) {
+      const line = section.body[i] ?? '';
+      if (/^\s*(?:```|~~~)/.test(line)) {
+        inFence = !inFence;
+        continue;
+      }
+      if (inFence) continue;
+
+      const lineNumber = section.startLine + i + 1;
+      if (parsedItemLines.has(lineNumber)) continue;
+
+      const markers = Array.from(line.matchAll(/\b(blocked-by|importance)\s*:/gi)).map(
+        (match) => (match[1] ?? '').toLowerCase(),
+      );
+      const uniqueMarkers = [...new Set(markers)];
+      if (uniqueMarkers.length === 0) continue;
+
+      const markerText = uniqueMarkers.map((marker) => `${marker}:`).join(' and ');
+      warnings.push(
+        `Orphan item marker(s) ${markerText} at body line ${lineNumber} are outside a canonical ` +
+          `item line (${line.trim().slice(0, 160)}). The parser cannot attach these markers to ` +
+          `an item; restore the wrapped text to the preceding item or rewrite the item with ` +
+          `plans:set-content.`,
+      );
+    }
+  }
+}
+
 function parseItemLine(
   line: string,
   lineNumber: number,
@@ -691,6 +765,7 @@ export function parsePlan(source: string, opts: ParseOptions = {}): ParsedPlan {
   const { fm, body } = splitFrontmatter(source);
   const { result: frontmatter, warnings, ok: fmOk } = parseFrontmatter(fm);
   const notices: string[] = [];
+  addMidWordLineBreakNotice(body, notices);
 
   const isLegacy = !fmOk || !frontmatter.slug || !frontmatter.status;
 
@@ -726,6 +801,7 @@ export function parsePlan(source: string, opts: ParseOptions = {}): ParsedPlan {
   let decisions: PlanDecision[] = [];
 
   let currentPhase: string | null = null;
+  const parsedItemLines = new Set<number>();
 
   for (const section of sections) {
     const norm = section.normalizedHeading;
@@ -772,10 +848,16 @@ export function parsePlan(source: string, opts: ParseOptions = {}): ParsedPlan {
       const item = parseItemLine(logical, section.startLine + i + 1, currentPhase, line);
       if (item) {
         items.push(item);
+        parsedItemLines.add(section.startLine + i + 1);
+        for (let j = 1; j <= consumed; j++) {
+          parsedItemLines.add(section.startLine + i + j + 1);
+        }
         i += consumed;
       }
     }
   }
+
+  addOrphanItemMarkerWarnings(sections, parsedItemLines, warnings);
 
   const idSeen = new Set<string>();
   for (const it of items) {

@@ -143,18 +143,20 @@ describe('parsePlan — hanging-indent continuation lines', () => {
   });
 
   it('honours a keyword that wrapped onto a continuation line', () => {
-    const [item] = parsePlan(
+    const p = parsePlan(
       lines(
         '---', 'slug: p', 'status: active', '---', '',
         '## Phase 1',
         '- **P-001** `todo` a long item whose keywords wrapped onto the next',
         '  line entirely blocked-by: P-002 importance: high',
       ),
-    ).items;
+    );
+    const [item] = p.items;
     expect(item.blockedBy).toEqual(['P-002']);
     expect(item.importance).toBe('high');
     expect(item.text).toContain('line entirely');
     expect(item.text).not.toMatch(/blocked-by|importance/);
+    expect(p.parseWarnings).toEqual([]);
   });
 
   it('stops at a blank line, a sibling bullet, a nested bullet and a fence', () => {
@@ -184,5 +186,45 @@ describe('parsePlan — hanging-indent continuation lines', () => {
   it('leaves an unwrapped item exactly as before', () => {
     const p = parsePlan(VALID);
     expect(p.items.map((i) => i.text)).toEqual(['do a thing', 'did a thing']);
+  });
+});
+
+describe('parsePlan — wrapper corruption diagnostics', () => {
+  it('notices lowercase-to-lowercase hard line breaks but ignores fenced examples', () => {
+    const p = parsePlan(
+      lines(
+        '---', 'slug: p', 'status: active', '---', '',
+        '## Phase 1',
+        '- **P-001** `todo` publish/y',
+        'ank/revoke and audit.',
+        '```',
+        'fenced/wrap',
+        'ped example',
+        '```',
+      ),
+    );
+
+    expect(p.parseWarnings).toEqual([]);
+    expect(p.parseNotices).toHaveLength(1);
+    expect(p.parseNotices[0]).toMatch(/mid-word hard line break/i);
+    expect(p.parseNotices[0]).toMatch(/lowercase letter.*newline.*lowercase letter/i);
+  });
+
+  it('errors when blocked-by and importance markers are detached from an item line', () => {
+    const p = parsePlan(
+      lines(
+        '---', 'slug: p', 'status: active', '---', '',
+        '## Phase 1',
+        '- **P-001** `todo` provenance, maintainer review, publish/y',
+        'ank/revoke, and audit. blocked-by: P-006 importance: high',
+      ),
+    );
+
+    expect(p.items).toHaveLength(1);
+    expect(p.items[0]?.blockedBy).toEqual([]);
+    expect(p.items[0]?.importance).toBe('normal');
+    expect(p.parseWarnings).toHaveLength(1);
+    expect(p.parseWarnings[0]).toMatch(/orphan item marker/i);
+    expect(p.parseWarnings[0]).toMatch(/blocked-by:.*importance:/i);
   });
 });
