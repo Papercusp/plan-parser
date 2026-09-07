@@ -126,6 +126,26 @@ describe('decision declaration matching (R1)', () => {
   });
 });
 
+describe('decision affects metadata', () => {
+  it('parses, de-duplicates, and round-trips canonical Affects metadata', () => {
+    const once = parsePlan(
+      planWith(
+        [
+          '### D-004 — cross-plan authority',
+          'Date: 2026-09-07',
+          'Affects: target-plan, second-plan, target-plan',
+          'The ruling is execution authority for both target plans.',
+        ].join('\n'),
+      ),
+    );
+    expect(once.decisions[0]?.affects).toEqual(['target-plan', 'second-plan']);
+
+    const twice = parsePlan(renderPlanMarkdown(once));
+    expect(twice.decisions[0]?.affects).toEqual(['target-plan', 'second-plan']);
+    expect(twice.decisions[0]?.body).toContain('Affects: target-plan, second-plan, target-plan');
+  });
+});
+
 describe('decision body heading normalization (R3)', () => {
   it('demotes `##` so the body cannot break out of the Decisions section', () => {
     const { body, normalized } = normalizeDecisionBodyHeadings(

@@ -179,6 +179,10 @@ export interface PlanDecision {
   body: string;
   date: string | null;
   itemRefs: string[];
+  /** Other plan slugs this decision explicitly governs via canonical
+   * `Affects:` metadata. Optional for compatibility with older derived rows;
+   * `parsePlan` always populates it. */
+  affects?: string[];
   lineNumber: number;
 }
 
@@ -699,6 +703,17 @@ function parseDecisionsSection(section: RawSection, notices: string[]): PlanDeci
       current.itemRefs = Array.from(refs);
       const dateLine = current.body.match(/^Date:\s*([\d-]+)/im);
       if (dateLine) current.date = dateLine[1] ?? null;
+      const affectsLine = current.body.match(/^Affects:\s*(.*)$/im);
+      current.affects = affectsLine
+        ? Array.from(
+            new Set(
+              (affectsLine[1] ?? '')
+                .split(',')
+                .map((slug) => slug.trim())
+                .filter(Boolean),
+            ),
+          )
+        : [];
       decisions.push(current);
     }
     current = null;
@@ -743,6 +758,7 @@ function parseDecisionsSection(section: RawSection, notices: string[]): PlanDeci
         body: '',
         date: null,
         itemRefs: [],
+        affects: [],
         lineNumber: section.startLine + i + 1,
       };
     } else if (current) {
