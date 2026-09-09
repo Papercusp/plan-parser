@@ -68,6 +68,21 @@ describe("@papercusp/plan-parser", () => {
     expect(p2.text).toContain("note: back-refs added to other-plan D-025");
   });
 
+  it('extracts only explicitly marked decision refs, not incidental or qualified prose citations', () => {
+    const withMarkers = PLAN.replace(
+      '- **P-001** `done` first thing',
+      '- **P-001** `done` first thing\n' +
+        '- **P-003** `todo` prose mentions its source D-006, external-plan#D-007, and other-plan D-008; ' +
+        'see D-009, decision: D-010, ref: D-011, and → D-012',
+    );
+    const p = parsePlan(withMarkers, { filePath: 'demo-2026-05-30.md' });
+    const item = p.items.find((candidate) => candidate.id === 'P-003')!;
+
+    expect(item.decisionRefs).toEqual(['D-009', 'D-010', 'D-011', 'D-012']);
+    expect(item.text).toContain('source D-006');
+    expect(item.text).toContain('external-plan#D-007');
+  });
+
   it("parses the optional `initiative` frontmatter grouping label (P-015)", () => {
     const withInit = parsePlan(
       PLAN.replace("status: active", "status: active\ninitiative: shared-hive"),
