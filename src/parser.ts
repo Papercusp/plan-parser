@@ -236,7 +236,27 @@ export interface ParsedPlan {
 const PNN = /^P-\d{3,}$/;
 const DNN = /^D-\d{3,}$/;
 const PNN_INLINE = /\bP-\d{3,}\b/g;
-const DNN_INLINE = /\bD-\d{3,}\b/g;
+
+/**
+ * An item only owns a decision when the author marks the token as a
+ * reference. A bare `D-NNN` in item prose is often a citation to a different
+ * record (for example, the source work-item's triage decision), and treating
+ * it as local structure creates a dangling ref or an accidental collision with
+ * a decision allocated later. Keep the accepted forms deliberately explicit:
+ * the arrow/ASCII arrow used by the plan format, plus labelled `see`,
+ * `decision`, and `ref` forms. The optional dash is the separator in the
+ * existing `- see D-NNN` spelling.
+ */
+const DECISION_REF_RE =
+  /(?:→|->|(?:[-–—·]\s*)?(?:see|decisions?|refs?|references?)\s*:?)\s*(D-\d{3,})\b/gi;
+
+function extractDecisionRefs(text: string): string[] {
+  return Array.from(
+    new Set(
+      Array.from(text.matchAll(DECISION_REF_RE), (match) => (match[1] ?? '').toUpperCase()).filter(Boolean),
+    ),
+  );
+}
 
 /**
  * The marker the operator's `plans:set-status` injects for a caller-supplied
@@ -648,7 +668,7 @@ function parseItemLine(
   // structured D-NNN refs — only `text` (returned to callers/display)
   // includes the note; the ref set must not.
   const textForDecisionRefs = text.replace(NOTE_SUFFIX_RE, '');
-  const decisionRefs = Array.from(new Set(textForDecisionRefs.match(DNN_INLINE) ?? []));
+  const decisionRefs = extractDecisionRefs(textForDecisionRefs);
 
   text = text.replace(/[·→—]+\s*$/g, '').trim();
   text = text.replace(/\s+→\s+(?=D-\d)/g, ' ').replace(/\s+·\s+/g, ' ').trim();
