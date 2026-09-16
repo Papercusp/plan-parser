@@ -350,4 +350,58 @@ describe('Project History v2', () => {
       }),
     ]);
   });
+
+  it('attaches an explicit planSlugs item by the plan FRONTMATTER slug, not the file path', async () => {
+    // The two slugs differ on purpose: `filePath` says `renamed-on-disk`, the
+    // frontmatter says `demo-release-2026-08-14`, and frontmatter wins. This is the
+    // membership rule the planSlugs branch implements, and the only thing that makes
+    // hoisting the parse out of that branch's filter observable — a hoist that read
+    // the wrong slug would attach nothing here while every other test stayed green.
+    const document = await generateProjectHistory({
+      project,
+      source,
+      provider: {
+        async loadPlans() {
+          return [
+            { markdown: MARKDOWN, filePath: 'docs/plans/renamed-on-disk.md' },
+            {
+              markdown: MARKDOWN
+                .replace('demo-release-2026-08-14', 'other-release-2026-08-14')
+                .replaceAll('WI-100', 'WI-300'),
+            },
+          ];
+        },
+        async loadWorkItems(ids) {
+          return ids.map((id) => ({
+            id,
+            kind: 'feature',
+            title: `Ledger ${id}`,
+            state: 'done',
+            completedAt: '2026-08-14T20:15:00.000Z',
+            completionAuthority: 'work-item-ledger',
+            completionSummary: 'Verified.',
+            completionEvidence: { provider: true },
+            // Both items are pinned to the FIRST plan's frontmatter slug, so the
+            // second plan must reject WI-300 even though its own markdown references it.
+            planSlugs: ['demo-release-2026-08-14'],
+          }));
+        },
+      },
+    });
+
+    expect(document.plans[0]?.slug).toBe('demo-release-2026-08-14');
+    expect(document.plans[0]?.completedItems).toEqual([
+      expect.objectContaining({ id: 'WI-100', completionAuthority: 'work-item-ledger' }),
+      expect.objectContaining({ id: 'WI-300', completionAuthority: 'work-item-ledger' }),
+    ]);
+
+    // The second plan's own marker still yields WI-300 — but as the compatibility
+    // plan-ledger STUB, never the explicit ledger record, because planSlugs pinned
+    // that record to the first plan. Asserting the AUTHORITY is what separates
+    // "rejected by planSlugs" from "attached anyway"; asserting the id alone cannot.
+    expect(document.plans[1]?.slug).toBe('other-release-2026-08-14');
+    expect(document.plans[1]?.completedItems).toEqual([
+      expect.objectContaining({ id: 'WI-300', completionAuthority: 'plan-ledger' }),
+    ]);
+  });
 });

@@ -351,7 +351,20 @@ function appliesToPlan(item: ProjectHistoryWorkItemInput, planSlug: string): boo
   return !item.planSlugs || item.planSlugs.length === 0 || item.planSlugs.includes(planSlug);
 }
 
-function referencedWorkItems(planInput: ProjectHistoryPlanInput): Set<string> {
+/**
+ * What one plan contributes to the id union, plus the slug membership is decided by.
+ *
+ * The slug is carried OUT of here on purpose. Both consumers below need it, and it
+ * costs a `parsePlan` over a plan body that can reach ~1MB, so re-deriving it per
+ * work item turns a per-plan cost into a per-(plan x item) one — see the comment on
+ * the filter in `generateProjectHistory`.
+ */
+interface PlanReferences {
+  slug: string;
+  ids: Set<string>;
+}
+
+function referencedWorkItems(planInput: ProjectHistoryPlanInput): PlanReferences {
   const parsed = parsePlan(planInput.markdown, { filePath: planInput.filePath });
   const resolved = resolveEffectiveStatus(parsed);
   const slug = parsed.frontmatter.slug ?? parsed.slug;
@@ -359,10 +372,13 @@ function referencedWorkItems(planInput: ProjectHistoryPlanInput): Set<string> {
     typeof parsed.frontmatter.updated === 'string' ? parsed.frontmatter.updated : null
   );
   const contentHash = hashPlanContent(planInput.markdown);
-  return new Set([
-    ...completedWorkItemsFromPlan(slug, updatedAt, contentHash, resolved.items).map((item) => item.id),
-    ...(planInput.completedItems ?? []).map((item) => item.id),
-  ]);
+  return {
+    slug,
+    ids: new Set([
+      ...completedWorkItemsFromPlan(slug, updatedAt, contentHash, resolved.items).map((item) => item.id),
+      ...(planInput.completedItems ?? []).map((item) => item.id),
+    ]),
+  };
 }
 
 /**
@@ -374,9 +390,11 @@ function referencedWorkItems(planInput: ProjectHistoryPlanInput): Set<string> {
 export async function generateProjectHistory(
   input: GenerateProjectHistoryInput,
 ): Promise<ProjectHistoryDocument> {
-  const plans = [...await input.provider.loadPlans()];
-  const references = plans.map(referencedWorkItems);
-  const ids = [...new Set(references.flatMap((values) => [...values]))].sort();
+  const plans = [...await input.provider.loadPlans()].map((plan) => ({
+    plan,
+    reference: referencedWorkItems(plan),
+  }));
+  const ids = [...new Set(plans.flatMap(({ reference }) => [...reference.ids]))].sort();
   const workItems = ids.length > 0 && input.provider.loadWorkItems
     ? [...await input.provider.loadWorkItems(ids)]
     : [];
@@ -403,17 +421,20 @@ export async function generateProjectHistory(
   return assembleProjectHistory({
     project: input.project,
     source: input.source,
-    plans: plans.map((plan, index) => ({
+    // `reference.slug` is the plan's slug, parsed ONCE above. It used to be
+    // re-derived with a fresh `parsePlan` INSIDE this filter callback, which runs
+    // once per (plan x work item) pair rather than once per plan: measured on a
+    // 20-plan page of the papercusp archive, 20 parses (87ms) became 2,780 (~12.1s),
+    // and it was the whole reason the History tab could not load a page.
+    plans: plans.map(({ plan, reference }) => ({
       ...plan,
       completedItems: [
         ...(plan.completedItems ?? []),
-        ...workItems.filter((item) => {
-          if (item.planSlugs && item.planSlugs.length > 0) {
-            const parsed = parsePlan(plan.markdown, { filePath: plan.filePath });
-            return item.planSlugs.includes(parsed.frontmatter.slug ?? parsed.slug);
-          }
-          return references[index]?.has(item.id) ?? false;
-        }),
+        ...workItems.filter((item) => (
+          item.planSlugs && item.planSlugs.length > 0
+            ? item.planSlugs.includes(reference.slug)
+            : reference.ids.has(item.id)
+        )),
       ],
     })),
     commits,
