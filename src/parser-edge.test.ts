@@ -227,4 +227,17 @@ describe('parsePlan — wrapper corruption diagnostics', () => {
     expect(p.parseWarnings[0]).toMatch(/orphan item marker/i);
     expect(p.parseWarnings[0]).toMatch(/blocked-by:.*importance:/i);
   });
+
+  it('preserves blockers across repeated blocked-by clauses', () => {
+    const p = parsePlan(
+      lines(
+        '---', 'slug: p', 'status: active', '---', '',
+        '## Phase 1',
+        '- **P-001** `todo` release sign-off blocked-by: P-002, P-004 blocked-by: P-003, P-002',
+      ),
+    );
+
+    expect(p.items[0]?.blockedBy).toEqual(['P-002', 'P-004', 'P-003']);
+    expect(p.items[0]?.text).toBe('release sign-off');
+  });
 });

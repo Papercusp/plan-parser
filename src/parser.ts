@@ -612,13 +612,16 @@ function parseItemLine(
 
   let text = rest;
   const blockedBy: string[] = [];
-  const blockedByRe = /\bblocked-by\s*:\s*((?:P-\d{3,}(?:\s*,\s*)?)+)/i;
-  const bbMatch = blockedByRe.exec(text);
-  if (bbMatch) {
-    const list = (bbMatch[1] ?? '').match(PNN_INLINE) ?? [];
-    blockedBy.push(...list);
-    text = (text.slice(0, bbMatch.index) + text.slice(bbMatch.index + bbMatch[0].length)).trim();
+  // Repeated clauses can exist in legacy plan text when an older structured
+  // writer removed only the first occurrence. Merge their refs conservatively:
+  // dropping a later prerequisite can admit dependent work prematurely.
+  const blockedByRe = /\bblocked-by\s*:\s*((?:P-\d{3,}(?:\s*,\s*)?)+)/gi;
+  for (const bbMatch of text.matchAll(blockedByRe)) {
+    for (const ref of (bbMatch[1] ?? '').match(PNN_INLINE) ?? []) {
+      if (!blockedBy.includes(ref)) blockedBy.push(ref);
+    }
   }
+  text = text.replace(blockedByRe, '').trim();
 
   // `importance:` keyword — parsed glyph-agnostically like blocked-by,
   // then stripped from the visible text. An unknown value degrades to
