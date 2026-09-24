@@ -528,10 +528,17 @@ function isItemContinuation(line: string): boolean {
 function addMidWordLineBreakNotice(body: string, notices: string[]): void {
   const masked = maskFences(body);
   const lines = new Set<number>();
+  // Line numbers are counted forward from the previous match. Re-splitting the prefix per match
+  // was quadratic in the body, and a fresh joiner folding many versions of a 180 KB plan paid
+  // for it on every one (9.3% of the serve process's CPU in P-007 run #7's tail).
+  let line = 1;
+  let counted = 0;
   for (const match of masked.matchAll(/[a-z]\n[a-z]/g)) {
     const index = match.index ?? -1;
     if (index < 0) continue;
-    lines.add(masked.slice(0, index).split('\n').length);
+    for (let nl = masked.indexOf('\n', counted); nl !== -1 && nl < index; nl = masked.indexOf('\n', nl + 1)) line++;
+    counted = index;
+    lines.add(line);
   }
   if (lines.size === 0) return;
 

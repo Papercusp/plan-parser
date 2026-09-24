@@ -210,6 +210,23 @@ describe('parsePlan — wrapper corruption diagnostics', () => {
     expect(p.parseNotices[0]).toMatch(/lowercase letter.*newline.*lowercase letter/i);
   });
 
+  it('reports the body line of every mid-word break, first eight then a count', () => {
+    // Ten wrapped items, each split mid-word after its first physical line.
+    const body: string[] = ['## Phase 1'];
+    for (let i = 1; i <= 10; i++) body.push(`- **P-${String(i).padStart(3, '0')}** \`todo\` wra`, 'pped text', '');
+    const p = parsePlan(lines('---', 'slug: p', 'status: active', '---', '', ...body));
+
+    expect(p.parseNotices).toHaveLength(1);
+    // A reference computed the direct way over the parser's body (everything after the closing
+    // `---`, so it opens with the blank line): a match's line is 1 + the newlines before it.
+    const notice = p.parseNotices[0] ?? '';
+    const expected: number[] = [];
+    const text = lines('', ...body);
+    for (const m of text.matchAll(/[a-z]\n[a-z]/g)) expected.push(text.slice(0, m.index).split('\n').length);
+    expect(expected).toHaveLength(10);
+    expect(notice).toContain(`at body line(s) ${expected.slice(0, 8).join(', ')}, … +2 more:`);
+  });
+
   it('errors when blocked-by and importance markers are detached from an item line', () => {
     const p = parsePlan(
       lines(
