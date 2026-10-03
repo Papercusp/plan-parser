@@ -108,6 +108,57 @@ export const ITEM_STATUSES = [
 ] as const;
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
 
+/** Item statuses that represent finished work. */
+export const TERMINAL_ITEM_STATUSES = ['done', 'dropped'] as const;
+
+/** True when an item is already finished. */
+export function isTerminalItemStatus(status: string | null | undefined): boolean {
+  return status === 'done' || status === 'dropped';
+}
+
+/** The status-only view needed to compare a plan's child graph across a write. */
+export interface PlanItemStatusSnapshot {
+  id: string;
+  status: string | null | undefined;
+}
+
+export interface TerminalPlanChildMutation {
+  itemId: string;
+  kind: 'added' | 'reopened';
+  from: string | null;
+  to: string;
+}
+
+/**
+ * Find only child mutations that introduce live work under a finished plan.
+ *
+ * Existing live children may still advance, and finished children may still be
+ * reclassified. This catches a newly added live child or a finished child
+ * reopened while its parent remains shipped/superseded.
+ */
+export function findTerminalPlanChildMutations(
+  parentStatus: string | null | undefined,
+  currentItems: readonly PlanItemStatusSnapshot[],
+  proposedItems: readonly PlanItemStatusSnapshot[],
+): TerminalPlanChildMutation[] {
+  if (!isTerminalPlanStatus(parentStatus)) return [];
+
+  const priorById = new Map(currentItems.map((item) => [item.id, item.status]));
+  const changes: TerminalPlanChildMutation[] = [];
+  for (const proposed of proposedItems) {
+    const existed = priorById.has(proposed.id);
+    const priorStatus = priorById.get(proposed.id);
+    if (isTerminalItemStatus(proposed.status) || (existed && !isTerminalItemStatus(priorStatus))) continue;
+    changes.push({
+      itemId: proposed.id,
+      kind: existed ? 'reopened' : 'added',
+      from: priorStatus ?? null,
+      to: proposed.status ?? '',
+    });
+  }
+  return changes;
+}
+
 /**
  * Per-item importance — a 4th axis orthogonal to status. Ordered most →
  * least important; the array index doubles as the sort rank. For a ToDo

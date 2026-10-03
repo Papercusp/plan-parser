@@ -4,7 +4,14 @@ import {
   derivePlanStatusTransition,
   reconcilePlanLifecycle,
 } from './lifecycle';
-import { PLAN_STATUSES, NON_TERMINAL_PLAN_STATUSES, type ItemStatus, type PlanItem } from './parser';
+import {
+  findTerminalPlanChildMutations,
+  NON_TERMINAL_PLAN_STATUSES,
+  PLAN_STATUSES,
+  TERMINAL_PLAN_STATUSES,
+  type ItemStatus,
+  type PlanItem,
+} from './parser';
 
 /**
  * plan-status-transition.test.ts — P-004 of
@@ -195,5 +202,52 @@ describe('reconcilePlanLifecycle — the new status is judged, not merely tolera
       expect(reconcilePlanLifecycle(status, live()).disposition).not.toBe('unrecognized');
     }
     expect(reconcilePlanLifecycle('not-a-status', drained()).disposition).toBe('unrecognized');
+  });
+});
+
+describe('findTerminalPlanChildMutations', () => {
+  it('rejects newly added live children under either terminal parent status', () => {
+    for (const parentStatus of TERMINAL_PLAN_STATUSES) {
+      expect(findTerminalPlanChildMutations(parentStatus, [], [{ id: 'P-001', status: 'todo' }])).toEqual([
+        { itemId: 'P-001', kind: 'added', from: null, to: 'todo' },
+      ]);
+    }
+  });
+
+  it('rejects reopening a finished child but permits terminal-child reclassification', () => {
+    expect(
+      findTerminalPlanChildMutations('shipped', [{ id: 'P-001', status: 'done' }], [
+        { id: 'P-001', status: 'needs-human' },
+      ]),
+    ).toEqual([{ itemId: 'P-001', kind: 'reopened', from: 'done', to: 'needs-human' }]);
+
+    expect(
+      findTerminalPlanChildMutations('shipped', [{ id: 'P-001', status: 'done' }], [
+        { id: 'P-001', status: 'dropped' },
+      ]),
+    ).toEqual([]);
+  });
+
+  it('leaves existing live children editable and does not apply while the parent is nonterminal', () => {
+    for (const parentStatus of TERMINAL_PLAN_STATUSES) {
+      expect(
+        findTerminalPlanChildMutations(parentStatus, [{ id: 'P-001', status: 'todo' }], [
+          { id: 'P-001', status: 'wip' },
+        ]),
+      ).toEqual([]);
+    }
+
+    for (const parentStatus of NON_TERMINAL_PLAN_STATUSES) {
+      expect(
+        findTerminalPlanChildMutations(parentStatus, [{ id: 'P-001', status: 'done' }], [
+          { id: 'P-001', status: 'todo' },
+          { id: 'P-002', status: 'todo' },
+        ]),
+      ).toEqual([]);
+    }
+  });
+
+  it('allows a newly recorded terminal historical child', () => {
+    expect(findTerminalPlanChildMutations('superseded', [], [{ id: 'P-001', status: 'done' }])).toEqual([]);
   });
 });
