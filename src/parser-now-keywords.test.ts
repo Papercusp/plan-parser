@@ -115,6 +115,18 @@ describe('parseItemLine — keyword strip & unknown-value degrade (Gap 7)', () =
     expect(it0?.text).toBe('do it');
   });
 
+  it('preserves keyword-like suffixes inside hyphenated prose', () => {
+    const text =
+      'OWNER-AUTHORITY: turn on the low-risk: option, high-importance: urgent preference, and not-blocked-by: P-002.';
+    const it0 = item(`- **P-001** \`todo\` ${text}`);
+
+    expect(it0?.text).toBe(text);
+    expect(it0?.authority).toBe('system');
+    expect(it0?.riskTier).toBeNull();
+    expect(it0?.importance).toBe('normal');
+    expect(it0?.blockedBy).toEqual([]);
+  });
+
   it('an UNKNOWN authority degrades to the system default and is stripped (no leak)', () => {
     const p = parsePlan(lines(...FM, '## Phase 1', '- **P-001** `todo` do it authority: nope'));
     const it0 = p.items[0];
