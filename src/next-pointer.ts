@@ -106,17 +106,24 @@ function isTerminal(status: ItemStatus): boolean {
  * only signal there is — keying on the boolean alone would silently rank a
  * human-gated item as ordinary work.
  */
-function awaitsHuman(item: ResolvedItem): boolean {
+export function itemAwaitsHuman(item: ResolvedItem): boolean {
   return item.needsHuman || item.effectiveStatus === 'needs-human';
 }
+const awaitsHuman = itemAwaitsHuman;
 
 /**
  * Rank exactly the way `plans:items` does: importance (urgent→low) first, then
  * document order. Implemented as a decorate-sort-undecorate on the input index
  * rather than relying on sort stability, so the tie-break is asserted by this
  * function instead of inherited from the engine.
+ *
+ * Exported as `rankItemsForPickup` so `summarizePlanStatus` lists actionable
+ * items in exactly the order this pointer chooses its head — one ranking, not two.
  */
-function rank(items: ResolvedItem[]): ResolvedItem[] {
+export function rankItemsForPickup<T extends ResolvedItem>(items: readonly T[]): T[] {
+  return rank(items);
+}
+function rank<T extends ResolvedItem>(items: readonly T[]): T[] {
   return items
     .map((item, index) => ({ item, index }))
     .sort((a, b) => {

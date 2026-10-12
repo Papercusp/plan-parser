@@ -18,6 +18,7 @@ export * from "./parser";
 export * from "./risk-model";
 export * from "./effective-status";
 export * from "./next-pointer";
+export * from "./plan-status-summary";
 export * from "./lifecycle";
 export * from "./renderer";
 export * from "./parts";
