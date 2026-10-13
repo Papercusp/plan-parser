@@ -57,6 +57,13 @@ export interface PlanStatusSummaryInput {
   lifecycle?: { verdict: string; lastActivityAt: string | null } | null;
   /** Cap on each list. Default 50. */
   listCap?: number;
+  /**
+   * itemId → blockers that live outside the item graph (for example an open issue that
+   * blocks the item). A non-terminal item listed here derives `blocked` even when its
+   * in-plan graph is clear: it is counted and listed as blocked, with these ids in
+   * `blockedOn`, and it is never the next pointer. Omit when not measured.
+   */
+  externalBlocks?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface SummaryItem {
@@ -69,7 +76,11 @@ export interface SummaryItem {
 }
 
 export interface SummaryBlockedItem extends SummaryItem {
-  /** Unresolved in-plan blockers. Empty with `external: true` means the item is stored `blocked` with no in-plan cause. */
+  /**
+   * Unresolved in-plan blockers, then any blockers outside the graph (`externalBlocks`).
+   * `external: true` means no in-plan blocker is unresolved: the block comes from outside
+   * the graph (an external blocker, or a stored `blocked` with no in-plan cause).
+   */
   blockedOn: string[];
   external: boolean;
 }
@@ -118,7 +129,16 @@ function latestDecision(
 
 export function summarizePlanStatus(input: PlanStatusSummaryInput): PlanStatusSummary {
   const cap = Math.max(1, input.listCap ?? DEFAULT_LIST_CAP);
-  const resolved = resolveEffectiveStatusForItems([...input.items]).items;
+  // Blind review #14 G-1: an external block is applied to the INPUT, so resolution, ranking
+  // and the next pointer all see the same blocked item. Applying it to the summary rows alone
+  // left the counts and the next pointer advertising an issue-blocked item as actionable.
+  const external = input.externalBlocks ?? {};
+  const items = input.items.map((it) =>
+    (external[it.id]?.length ?? 0) > 0 && it.storedStatus !== 'done' && it.storedStatus !== 'dropped'
+      ? { ...it, storedStatus: 'blocked' as const }
+      : it,
+  );
+  const resolved = resolveEffectiveStatusForItems(items).items;
 
   const counts = Object.fromEntries(ITEM_STATUSES.map((s) => [s, 0])) as Record<ItemStatus, number>;
   for (const it of resolved) counts[it.effectiveStatus] += 1;
@@ -144,7 +164,7 @@ export function summarizePlanStatus(input: PlanStatusSummaryInput): PlanStatusSu
   );
   const blockedAll = ranked.filter((it) => it.effectiveStatus === 'blocked' && !itemAwaitsHuman(it));
 
-  const pointer = deriveNextPointer(input.items);
+  const pointer = deriveNextPointer(items);
   const decision = latestDecision(input.decisions);
   const lifecycle = input.lifecycle ?? null;
 
@@ -168,7 +188,7 @@ export function summarizePlanStatus(input: PlanStatusSummaryInput): PlanStatusSu
     inFlight: inFlightAll.slice(0, cap).map(toSummary),
     blocked: blockedAll.slice(0, cap).map((it) => ({
       ...toSummary(it),
-      blockedOn: [...it.unresolvedBlockers],
+      blockedOn: [...it.unresolvedBlockers, ...(external[it.id] ?? [])],
       external: it.unresolvedBlockers.length === 0,
     })),
     awaitingHuman: awaitingAll.slice(0, cap).map(toSummary),
