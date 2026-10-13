@@ -137,6 +137,27 @@ describe('summarizePlanStatus — composed inputs', () => {
   });
 });
 
+describe('summarizePlanStatus — blocks from outside the graph (blind review #14 G-1)', () => {
+  it('an externally blocked todo item is counted and listed blocked, names its blocker, and is never next', () => {
+    const s = summarizePlanStatus({ items: [item('P-001', 'todo'), item('P-002', 'todo')], externalBlocks: { 'P-001': ['EI-1'] } });
+    expect(s.counts.blocked).toBe(1);
+    expect(s.actionable.map((i) => i.id)).toEqual(['P-002']);
+    expect(s.blocked).toEqual([expect.objectContaining({ id: 'P-001', blockedOn: ['EI-1'], external: true })]);
+    expect(s.next.itemId).toBe('P-002');
+  });
+  it('CONTROL: without the external block the same item is actionable', () => {
+    const s = summarizePlanStatus({ items: [item('P-001', 'todo'), item('P-002', 'todo')] });
+    expect(s.counts.blocked).toBe(0);
+    expect(s.actionable.map((i) => i.id)).toContain('P-001');
+  });
+  it('a wip item under an external block derives blocked; a terminal one stays terminal', () => {
+    const s = summarizePlanStatus({ items: [item('P-001', 'wip'), item('P-002', 'done')], externalBlocks: { 'P-001': ['EI-1'], 'P-002': ['EI-2'] } });
+    expect(s.counts.blocked).toBe(1);
+    expect(s.counts.wip).toBe(0);
+    expect(s.counts.done).toBe(1);
+  });
+});
+
 describe('summarizePlanStatus — bounds report themselves', () => {
   it('caps a list and flags it truncated; counts still census every item', () => {
     const items = Array.from({ length: 7 }, (_, i) => item(`P-00${i + 1}`, 'todo'));
