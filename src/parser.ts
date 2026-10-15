@@ -225,6 +225,7 @@ export interface PlanItem {
 }
 
 export interface PlanDecision {
+  promotedFrom?: Array<{ kind: string; ref: string }>;
   id: string;
   title: string;
   body: string;
@@ -787,6 +788,14 @@ function parseDecisionsSection(section: RawSection, notices: string[]): PlanDeci
       current.itemRefs = Array.from(refs);
       const dateLine = current.body.match(/^Date:\s*([\d-]+)/im);
       if (dateLine) current.date = dateLine[1] ?? null;
+      const promotionLine = current.body.match(/^Promoted-From:\s*(.*)$/im);
+      if (promotionLine) {
+        try {
+          const refs: unknown = JSON.parse(promotionLine[1]);
+          if (Array.isArray(refs)) current.promotedFrom = refs.filter((v): v is { kind: string; ref: string } =>
+            !!v && typeof v === 'object' && typeof v.kind === 'string' && typeof v.ref === 'string');
+        } catch { /* Legacy prose is not a typed promotion edge. */ }
+      }
       const affectsLine = current.body.match(/^Affects:\s*(.*)$/im);
       current.affects = affectsLine
         ? Array.from(
