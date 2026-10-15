@@ -173,6 +173,8 @@ export type Importance = (typeof IMPORTANCE_LEVELS)[number];
 export const DEFAULT_IMPORTANCE: Importance = 'normal';
 
 export interface PlanFrontmatter {
+  /** R-9 opt-in only: successful item completion requires independently frozen tests. */
+  frozenTests?: 'pilot';
   title?: string;
   slug?: string;
   status?: PlanStatus;
@@ -451,6 +453,7 @@ function parseFrontmatter(fm: string | null): {
   if (typeof raw.owner === 'string') out.owner = raw.owner;
   if (typeof raw.initiative === 'string') out.initiative = raw.initiative;
   if (typeof raw.template === 'string') out.template = raw.template;
+  if (raw.frozenTests === 'pilot') out.frozenTests = 'pilot';
   if (Array.isArray(raw.supersedes)) out.supersedes = raw.supersedes;
   if (typeof raw['superseded-by'] === 'string') out.supersededBy = raw['superseded-by'];
   if (typeof raw.supersededBy === 'string' && !out.supersededBy) {
