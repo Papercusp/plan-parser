@@ -10,8 +10,9 @@
  *   - Tolerant heading match: strips leading `N. ` / `N.M ` before
  *     comparing to canonical names (## Now, ## Decisions). So
  *     `## 7. Decisions` matches.
- *   - Separator-agnostic: `blocked-by:` is a keyword, `P-NNN`/`D-NNN`
- *     are token patterns. Display glyphs (·, →, —) are never required.
+ *   - Separator-agnostic: `blocked-by:` is a keyword, and the legacy sentence
+ *     form `Blocked by P-NNN.` is accepted at a sentence boundary. `P-NNN`/
+ *     `D-NNN` are token patterns. Display glyphs (·, →, —) are never required.
  *   - Computed effectiveStatus is OUT OF SCOPE here — see resolver.ts.
  *     The parser surfaces only `storedStatus`.
  *   - Legacy detection is "missing or malformed frontmatter, or no
@@ -693,6 +694,20 @@ function parseItemLine(
     }
   }
   text = text.replace(blockedByRe, '').trim();
+
+  // Older hand-authored plans commonly used a sentence-form dependency such
+  // as `... preserves today's behavior. Blocked by P-003.` instead of the
+  // canonical `blocked-by:` keyword emitted by the writers. Accept only the
+  // exact sentence-start form so ordinary prose such as `not blocked by P-003`
+  // does not become a dependency edge. Renderer/mutator output remains
+  // canonical because this clause is stripped from the visible item text.
+  const proseBlockedByRe = /(^|[.!?]\s+)blocked\s+by\s+((?:P-\d{3,}(?:\s*,\s*)?)+)\s*[.!?]?/gi;
+  for (const bbMatch of text.matchAll(proseBlockedByRe)) {
+    for (const ref of (bbMatch[2] ?? '').match(PNN_INLINE) ?? []) {
+      if (!blockedBy.includes(ref)) blockedBy.push(ref);
+    }
+  }
+  text = text.replace(proseBlockedByRe, '$1').trim();
 
   // `importance:` keyword — parsed glyph-agnostically like blocked-by,
   // then stripped from the visible text. An unknown value degrades to

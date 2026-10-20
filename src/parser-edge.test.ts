@@ -159,6 +159,23 @@ describe('parsePlan — hanging-indent continuation lines', () => {
     expect(p.parseWarnings).toEqual([]);
   });
 
+  it('extracts the legacy sentence-form Blocked by clause at a sentence boundary', () => {
+    const p = parsePlan(
+      lines(
+        '---', 'slug: p', 'status: active', '---', '',
+        '## Phase 1',
+        '- **P-001** `todo` preserves today\'s behavior. Blocked by P-003.',
+        '- **P-002** `todo` this is not blocked by P-003.',
+        '- **P-004** `todo` Blocked by P-002, P-003.',
+      ),
+    );
+    expect(p.items.find((item) => item.id === 'P-001')?.blockedBy).toEqual(['P-003']);
+    expect(p.items.find((item) => item.id === 'P-001')?.text).toBe("preserves today's behavior.");
+    expect(p.items.find((item) => item.id === 'P-002')?.blockedBy).toEqual([]);
+    expect(p.items.find((item) => item.id === 'P-002')?.text).toContain('not blocked by P-003');
+    expect(p.items.find((item) => item.id === 'P-004')?.blockedBy).toEqual(['P-002', 'P-003']);
+  });
+
   it('stops at a blank line, a sibling bullet, a nested bullet and a fence', () => {
     const p = parsePlan(
       lines(
