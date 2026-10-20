@@ -16,6 +16,7 @@
  */
 export * from "./parser";
 export * from "./risk-model";
+export * from "./verification-vocabulary";
 export * from "./effective-status";
 export * from "./next-pointer";
 export * from "./plan-status-summary";

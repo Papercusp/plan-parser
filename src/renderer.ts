@@ -96,6 +96,11 @@ function renderItem(item: PlanItem): string {
   if ((item.authority ?? DEFAULT_AUTHORITY) !== DEFAULT_AUTHORITY) {
     keywords += ` authority: ${item.authority}`;
   }
+  // Declared deliverable kind (plan-verification-profiles P-002): emitted only when declared,
+  // so an undeclared item renders exactly as before.
+  if (item.deliverable != null) {
+    keywords += ` deliverable: ${item.deliverable}`;
+  }
   return `- **${item.id}** \`${item.storedStatus}\` ${baseText}${keywords}${noteSuffix}`;
 }
 

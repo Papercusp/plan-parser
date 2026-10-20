@@ -26,6 +26,7 @@ import {
   AUTHORITY_LEVELS,
   DEFAULT_AUTHORITY,
 } from './risk-model';
+import { type DeliverableKind, isDeliverableKind } from './verification-vocabulary';
 
 /**
  * The plan-lifecycle vocabulary.
@@ -219,6 +220,11 @@ export interface PlanItem {
    *  computed risk. Defaults to `system` when the line carries no `authority:`
    *  keyword. Optional on the type (parser always populates). See `./risk-model`. */
   authority?: Authority;
+  /** Per-item declared deliverable kind (plan-verification-profiles P-002) from the
+   *  `deliverable:` keyword. `null` when the line declares none: the consumer then
+   *  infers the kind from the plan profile and other signals. Optional on the type
+   *  (parser always populates). See `./verification-vocabulary`. */
+  deliverable?: DeliverableKind | null;
   blockedBy: string[];
   decisionRefs: string[];
   phase: string | null;
@@ -732,6 +738,18 @@ function parseItemLine(
     text = (text.slice(0, authMatch.index) + text.slice(authMatch.index + authMatch[0].length)).trim();
   }
 
+  // `deliverable:` keyword — the item's declared deliverable kind (plan-verification-profiles
+  // P-002). Parsed and stripped like `risk:`; an unknown value degrades to `null` (undeclared)
+  // WITHOUT a parseWarning, so a typo never turns into a lint error.
+  let deliverable: DeliverableKind | null = null;
+  const deliverableRe = /(?<![\w-])deliverable\s*:\s*([a-z]+)\b/i;
+  const deliverableMatch = deliverableRe.exec(text);
+  if (deliverableMatch) {
+    const tok = (deliverableMatch[1] ?? '').toLowerCase();
+    if (isDeliverableKind(tok)) deliverable = tok;
+    text = (text.slice(0, deliverableMatch.index) + text.slice(deliverableMatch.index + deliverableMatch[0].length)).trim();
+  }
+
   // EI-522: strip a set-status-injected note's free prose before scanning for
   // structured D-NNN refs — only `text` (returned to callers/display)
   // includes the note; the ref set must not.
@@ -748,6 +766,7 @@ function parseItemLine(
     importance,
     riskTier,
     authority,
+    deliverable,
     blockedBy,
     decisionRefs,
     phase,
