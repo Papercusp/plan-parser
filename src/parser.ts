@@ -27,7 +27,7 @@ import {
   AUTHORITY_LEVELS,
   DEFAULT_AUTHORITY,
 } from './risk-model';
-import { type DeliverableKind, isDeliverableKind } from './verification-vocabulary';
+import { type DeliverableRef, type TypeSlug, isTypeSlug, normalizeDeliverableToken } from './verification-vocabulary';
 
 /**
  * The plan-lifecycle vocabulary.
@@ -192,6 +192,11 @@ export interface PlanFrontmatter {
    *  column (mirrors `initiative`); the per-plan structured instance data lives in
    *  the `template_data` jsonb (plans:set-template-data), never in frontmatter. */
   template?: string;
+  /** Plan TYPE (plan-item-types-registry-cupboard P-002): a namespaced plan-type slug such as
+   *  `papercusp/coding` or `acme/legal-matter`, from the `type:` key. Grammar-checked only; a
+   *  malformed value is left unset (it stays visible in `raw`). Which plan type it names, and
+   *  whether it is installed, is the consumer's resolver's business. */
+  type?: TypeSlug;
   supersedes?: string[];
   supersededBy?: string;
   raw: Record<string, string | string[]>;
@@ -221,11 +226,12 @@ export interface PlanItem {
    *  computed risk. Defaults to `system` when the line carries no `authority:`
    *  keyword. Optional on the type (parser always populates). See `./risk-model`. */
   authority?: Authority;
-  /** Per-item declared deliverable kind (plan-verification-profiles P-002) from the
-   *  `deliverable:` keyword. `null` when the line declares none: the consumer then
-   *  infers the kind from the plan profile and other signals. Optional on the type
-   *  (parser always populates). See `./verification-vocabulary`. */
-  deliverable?: DeliverableKind | null;
+  /** Per-item declared item type (plan-verification-profiles P-002;
+   *  plan-item-types-registry-cupboard P-002) from the `deliverable:` keyword: a built-in
+   *  kind or a namespaced item-type slug, grammar-checked only. `null` when the line declares
+   *  none or the token is malformed: the consumer then uses the plan type's default. Optional
+   *  on the type (parser always populates). See `./verification-vocabulary`. */
+  deliverable?: DeliverableRef | null;
   blockedBy: string[];
   decisionRefs: string[];
   phase: string | null;
@@ -458,6 +464,7 @@ function parseFrontmatter(fm: string | null): {
   if (typeof raw.created === 'string') out.created = raw.created;
   if (typeof raw.updated === 'string') out.updated = raw.updated;
   if (typeof raw.owner === 'string') out.owner = raw.owner;
+  if (typeof raw.type === 'string' && isTypeSlug(raw.type)) out.type = raw.type;
   if (typeof raw.initiative === 'string') out.initiative = raw.initiative;
   if (typeof raw.template === 'string') out.template = raw.template;
   if (raw.frozenTests === 'pilot') out.frozenTests = 'pilot';
@@ -753,15 +760,16 @@ function parseItemLine(
     text = (text.slice(0, authMatch.index) + text.slice(authMatch.index + authMatch[0].length)).trim();
   }
 
-  // `deliverable:` keyword — the item's declared deliverable kind (plan-verification-profiles
-  // P-002). Parsed and stripped like `risk:`; an unknown value degrades to `null` (undeclared)
-  // WITHOUT a parseWarning, so a typo never turns into a lint error.
-  let deliverable: DeliverableKind | null = null;
-  const deliverableRe = /(?<![\w-])deliverable\s*:\s*([a-z]+)\b/i;
+  // `deliverable:` keyword — the item's declared item type (plan-verification-profiles P-002;
+  // plan-item-types-registry-cupboard P-002): a built-in kind or a namespaced slug such as
+  // `acme/legal-review`, grammar-checked only. Parsed and stripped like `risk:`; a malformed or
+  // unknown bare value degrades to `null` (undeclared) WITHOUT a parseWarning, so a typo never
+  // turns into a lint error. The token runs to the next whitespace so a slash is kept.
+  let deliverable: DeliverableRef | null = null;
+  const deliverableRe = /(?<![\w-])deliverable\s*:\s*([^\s`]+)/i;
   const deliverableMatch = deliverableRe.exec(text);
   if (deliverableMatch) {
-    const tok = (deliverableMatch[1] ?? '').toLowerCase();
-    if (isDeliverableKind(tok)) deliverable = tok;
+    deliverable = normalizeDeliverableToken(deliverableMatch[1] ?? '');
     text = (text.slice(0, deliverableMatch.index) + text.slice(deliverableMatch.index + deliverableMatch[0].length)).trim();
   }
 
