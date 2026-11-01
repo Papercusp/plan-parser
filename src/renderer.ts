@@ -101,7 +101,10 @@ export function renderPlanItem(item: PlanItem): string {
   if (item.deliverable != null) {
     keywords += ` deliverable: ${item.deliverable}`;
   }
-  return `- **${item.id}** \`${item.storedStatus}\` ${baseText}${keywords}${noteSuffix}`;
+  // The parser removes keywords but retains the space BEFORE them. Reuse
+  // that separator for the note rather than adding a space on every render.
+  const renderedNote = keywords && /^\s/.test(noteSuffix) ? noteSuffix.slice(1) : noteSuffix;
+  return `- **${item.id}** \`${item.storedStatus}\` ${baseText}${keywords}${renderedNote}`;
 }
 
 /** Render one decision: `### D-NNN — title` then its body verbatim (the body
