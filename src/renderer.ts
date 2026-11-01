@@ -62,7 +62,7 @@ function renderNow(now: PlanNowBlock): string {
  * inline `D-NNN` decision refs, so `item.text` already carries the refs and we
  * re-append only the stripped keywords (importance only when non-default).
  */
-function renderItem(item: PlanItem): string {
+export function renderPlanItem(item: PlanItem): string {
   // EI-20577635585381178: keywords MUST be emitted BEFORE any ` — note: …` suffix.
   // The parser keeps a set-status-injected note inside `item.text`, and
   // NOTE_SUFFIX_RE (`/\s*—\s*note:.*$/`) matches to END OF LINE. set-status replaces
@@ -148,7 +148,7 @@ export function renderPlanMarkdown(parsed: ParsedPlan): string {
         lines.push('');
         prevPhase = phase;
       }
-      lines.push(renderItem(item));
+      lines.push(renderPlanItem(item));
     }
     blocks.push(lines.join('\n'));
   }
