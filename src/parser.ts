@@ -574,7 +574,7 @@ const ITEM_LINE_RE =
  * early merely preserves the old behavior for that line, whereas folding a
  * block element in would corrupt the item — so every ambiguous shape stops.
  */
-function isItemContinuation(line: string): boolean {
+export function isItemContinuation(line: string): boolean {
   if (!/^[ \t]/.test(line)) return false; // must be indented under the bullet
   const t = line.trim();
   if (t === '') return false; // a blank line ends the item
