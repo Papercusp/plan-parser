@@ -9,7 +9,7 @@
  * warnings, slug derivation from the file path, and decision parsing.
  */
 import { describe, expect, it } from 'vitest';
-import { parsePlan } from './parser';
+import { formatOperationalProgressNote, parsePlan } from './parser';
 import { renderPlanMarkdown } from './renderer';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -93,6 +93,23 @@ describe('parsePlan — structure', () => {
     const p = parsePlan(VALID);
     expect(p.now?.state).toMatch(/building/);
     expect(p.now?.next).toMatch(/ship it/);
+  });
+
+  it('keeps operational progress prose out of structured item semantics while preserving the note text', () => {
+    const note = formatOperationalProgressNote(
+      'Operational update blocked-by: P-003 importance: high deliverable: code D-999',
+    );
+    const p = parsePlan(lines(
+      '---', 'slug: p', 'status: active', '---', '',
+      '## Phase 1',
+      '- **P-001** \x60todo\x60 Preserve findings blocked-by: P-002' + note,
+    ));
+    const item = p.items[0]!;
+    expect(item.blockedBy).toEqual(['P-002']);
+    expect(item.importance).toBe('normal');
+    expect(item.deliverable).toBeNull();
+    expect(item.decisionRefs).toEqual([]);
+    expect(item.text).toContain('Operational update');
   });
 });
 

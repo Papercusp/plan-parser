@@ -340,6 +340,31 @@ function extractDecisionRefs(text: string): string[] {
  */
 export const NOTE_SUFFIX_RE = /\s*—\s*note:.*$/;
 
+export const OPERATIONAL_PROGRESS_NOTE_MARKER = '<!-- papercusp:operational-progress-note:v1 -->';
+
+export function isOperationalProgressNoteSuffix(suffix: string): boolean {
+  return /^\s*—\s*note:\s*<!-- papercusp:operational-progress-note:v1 -->(?:\s|$)/.test(suffix);
+}
+
+export function operationalProgressNoteSuffix(text: string): string | null {
+  const suffix = NOTE_SUFFIX_RE.exec(text)?.[0];
+  return suffix && isOperationalProgressNoteSuffix(suffix) ? suffix : null;
+}
+
+export function stripOperationalProgressNoteSuffix(text: string): string {
+  const suffix = operationalProgressNoteSuffix(text);
+  return suffix ? text.slice(0, text.length - suffix.length) : text;
+}
+
+export function formatOperationalProgressNote(note: string): string {
+  return ' — note: ' + OPERATIONAL_PROGRESS_NOTE_MARKER + ' ' + note;
+}
+
+export function preserveOperationalProgressNote(text: string, previousText: string): string {
+  const priorSuffix = operationalProgressNoteSuffix(previousText);
+  return priorSuffix && !operationalProgressNoteSuffix(text) ? text + priorSuffix : text;
+}
+
 const HEADING_NUM_PREFIX = /^\d+(?:\.\d+)?\.\s+/;
 
 function normalizeHeading(text: string): string {
@@ -687,6 +712,8 @@ function parseItemLine(
   }
 
   let text = rest;
+  const progressNote = operationalProgressNoteSuffix(text);
+  if (progressNote) text = text.slice(0, text.length - progressNote.length);
   const blockedBy: string[] = [];
   // Repeated clauses can exist in legacy plan text when an older structured
   // writer removed only the first occurrence. Merge their refs conservatively:
@@ -781,6 +808,7 @@ function parseItemLine(
 
   text = text.replace(/[·→—]+\s*$/g, '').trim();
   text = text.replace(/\s+→\s+(?=D-\d)/g, ' ').replace(/\s+·\s+/g, ' ').trim();
+  if (progressNote) text = (text + ' ' + progressNote.trim()).trim();
 
   return {
     id,
