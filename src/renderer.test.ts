@@ -226,6 +226,27 @@ describe('renderPlanMarkdown round-trip', () => {
     );
   });
 
+  it.each([
+    'Preserve findings importance: high deliverable: code D-050 — note: Original evidence',
+    'Preserve findings D-050 importance: high deliverable: code — note: Original evidence',
+    'Preserve findings D-050 blocked-by: P-002 importance: high deliverable: code — note: Original evidence',
+  ])('preserves legacy note punctuation and metadata across repeated rendering: %s', text => {
+    const original = parsePlan('## Phase 1\n- **P-001** `todo` ' + text + '\n');
+    const expected = original.items[0]!;
+    const meaning = (value: string) => value.replace(/\s+/g, ' ').trim();
+    let current = original;
+    for (let pass = 0; pass < 3; pass++) {
+      const rendered = renderPlanMarkdown(current);
+      const next = parsePlan(rendered);
+      expect(rendered).toContain('deliverable: code — note: Original evidence');
+      expect(meaning(next.items[0]!.text)).toBe(meaning(expected.text));
+      expect(next.items[0]).toMatchObject({ importance: expected.importance,
+        deliverable: expected.deliverable, decisionRefs: expected.decisionRefs, blockedBy: expected.blockedBy });
+      expect(renderPlanMarkdown(next)).toBe(rendered);
+      current = next;
+    }
+  });
+
   it('preserves a legacy plan (no frontmatter)', () => {
     roundTripStable('# Legacy notes\n\nSome prose.\n\n## Phase 1\n\n- **P-001** `todo` do it\n');
   });

@@ -101,9 +101,11 @@ export function renderPlanItem(item: PlanItem): string {
   if (item.deliverable != null) {
     keywords += ` deliverable: ${item.deliverable}`;
   }
-  // The parser removes keywords but retains the space BEFORE them. Reuse
-  // that separator for the note rather than adding a space on every render.
-  const renderedNote = keywords && /^\s/.test(noteSuffix) ? noteSuffix.slice(1) : noteSuffix;
+  // Metadata tokens need a separator before the note. Removing its only space
+  // produces `deliverable: code— note: ...`, so the parser consumes the dash
+  // as part of the deliverable. Emit one separator even when an older text
+  // projection retained several spaces from the stripped metadata fields.
+  const renderedNote = keywords && noteSuffix ? ` ${noteSuffix.trimStart()}` : noteSuffix;
   return `- **${item.id}** \`${item.storedStatus}\` ${baseText}${keywords}${renderedNote}`;
 }
 
